@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ==========================================
+    // USERS COLLECTION
+    // ==========================================
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.keys().hasAll(['email', 'name', 'birthday', 'school', 'createdAt'])
+                    && request.resource.data.email == request.auth.token.email;
+
+      allow update: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.uid == resource.data.uid
+                    && request.resource.data.email == resource.data.email;
+
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // EVENTS COLLECTION
+    // ==========================================
+    match /events/{eventId} {
+      allow read: if request.auth != null;
+
+      allow create, update: if request.auth != null
+                            && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+
+      allow delete: if request.auth != null
+                    && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // ==========================================
+    // REELS COLLECTION - UPDATED FOR PUBLIC ACCESS
+    // ==========================================
+    match /reels/{reelId} {
+      // Anyone can read reels (no authentication required)
+      allow read: if true;
+
+      // Only authenticated users can create reels
+      allow create: if request.auth != null
+                    && request.resource.data.uploadedBy == request.auth.uid
+                    && request.resource.data.keys().hasAll(['uploadedBy', 'uploaderName', 'caption', 'media', 'createdAt']);
+
+      // Anyone can update reels for likes, comments, and views
+      // Only allow updating these fields: likes, likedBy, comments, views
+      // Prevent updating: id, media, caption, uploadedBy, uploaderName, createdAt
+      allow update: if !request.resource.data.diff(resource.data).affectedKeys()
+                        .hasAny(['id', 'media', 'caption', 'uploadedBy', 'uploaderName', 'createdAt']);
+
+      // Only the reel creator can delete their own reels
+      allow delete: if request.auth != null
+                    && resource.data.uploadedBy == request.auth.uid;
+    }
+  }
+}

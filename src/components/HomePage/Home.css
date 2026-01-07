@@ -1,0 +1,360 @@
+@import url('https://fonts.googleapis.com/css2?family=Inknut+Antiqua:wght@300;400;500;600;700&family=Kablammo&family=Inspiration&family=Jolly+Lodger&family=League+Gothic&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  min-height: 100vh;
+}
+
+.whole {
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+}
+
+.home-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 40px 20px;
+  background:
+    radial-gradient(circle, rgba(231, 225, 225, 0.49) 40%, rgba(236, 231, 192, 0.8) 80%),
+    url('../../assets/Africa-image-final.png');
+  background-size: 100% 100%, 50% auto;
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+.main-title {
+  font-family: 'Inknut Antiqua', serif;
+  font-size: 2.5rem;
+  text-align: center;
+  color: #4A90A4;
+  margin-bottom: 50px;
+  text-decoration: underline;
+  text-decoration-color: #8FE388;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 8px;
+}
+
+.about-section,
+.mission-section {
+  margin: 60px 0;
+}
+
+.section-content {
+  display: flex;
+  gap: 30px;
+  align-items: center;
+}
+
+.text-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.section-header {
+  font-family: 'Kablammo', cursive;
+  font-size: 1.8rem;
+  padding: 12px 25px;
+  display: inline-block;
+  margin-bottom: 25px;
+  position: relative;
+  font-weight: 400;
+  letter-spacing: 1px;
+}
+
+.about-header {
+  background: linear-gradient(135deg, #F4A460, #FFB347);
+  color: #333;
+  border-radius: 0 30px 30px 0;
+  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.mission-header {
+  background: linear-gradient(135deg, #FFD700, #FFA500);
+  color: #333;
+  border-radius: 30px 0 0 30px;
+  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.1);
+  margin-left: auto;
+}
+
+.section-text {
+  font-family: 'Georgia', serif;
+  font-size: 1.05rem;
+  line-height: 1.8;
+  color: #333;
+  text-align: justify;
+  padding: 15px;
+  background-color: rgba(255, 255, 255);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.image-container {
+  flex: 0 0 300px;
+  overflow: hidden;
+  border-radius: 15px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.image-container:hover {
+  transform: scale(1.05) rotate(2deg);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+}
+
+.image-container img {
+  width: 100%;
+  height: 300px;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.3s ease;
+}
+
+.image-container:hover img {
+  transform: scale(1.1);
+}
+
+.separator {
+  margin: 80px 0;
+  text-align: center;
+}
+
+.separator hr {
+  border: none;
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    #8FE388 20%,
+    #4A90A4 50%,
+    #8FE388 80%,
+    transparent
+  );
+  position: relative;
+}
+
+.separator hr::before,
+.separator hr::after {
+  content: '◆';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #4A90A4;
+  font-size: 1.2rem;
+}
+
+.separator hr::before {
+  left: 25%;
+}
+
+.separator hr::after {
+  right: 25%;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .main-title {
+    font-size: 1.8rem;
+  }
+
+  .section-content {
+    flex-direction: column;
+  }
+
+  .mission-section .section-content {
+    flex-direction: column-reverse;
+  }
+
+  .image-container {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 400px;
+  }
+
+  .section-header {
+    font-size: 1.5rem;
+  }
+
+  .section-text {
+    font-size: 1rem;
+  }
+
+  .eboard-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* E-Board Section */
+.eboard-section {
+  margin: 80px 0;
+}
+
+.eboard-title {
+  font-family: 'Kablammo', cursive;
+  font-size: 2.5rem;
+  text-align: center;
+  background: linear-gradient(135deg, #8FE388, #4A90A4);
+  color: white;
+  padding: 15px 40px;
+  display: inline-block;
+  border-radius: 20px;
+  margin: 0 auto 50px;
+  display: block;
+  width: fit-content;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.eboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0;
+  width: 85%;
+  margin: 0 auto;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.eboard-member {
+  width: 100%;
+  height: 450px;
+  position: relative;
+  overflow: hidden;
+  border: 2px solid #fff;
+}
+
+.eboard-member .flag-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+}
+
+.eboard-member .profile-image {
+  width: 60%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  z-index: 3;
+}
+
+.eboard-member .member-name {
+  font-family: 'Inspiration', cursive;
+  font-size: 3.5rem;
+  color: #F4FF5E;
+  position: absolute;
+  top: 80%;
+  right: 20%;
+  z-index: 4;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.7);
+  margin: 0;
+  line-height: 1;
+}
+
+.eboard-member .member-position {
+  font-family: 'Jolly Lodger', cursive;
+  font-size: 2.8rem;
+  color: white;
+  position: absolute;
+  top: 70%;
+  right: 20%;
+  z-index: 4;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.7);
+  margin: 0;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.eboard-member .member-major {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 4;
+  background-color: rgba(124, 252, 0, 0.9);
+  padding: 8px 12px;
+  border-radius: 5px;
+}
+
+.eboard-member .member-major p {
+  font-family: 'League Gothic', sans-serif;
+  font-weight: bold;
+  color: #333;
+  font-size: 1rem;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+
+.eboard-member .adg-logo {
+  width: 9%;
+  min-width: 50px;
+  height: auto;
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  z-index: 4;
+}
+
+/* Mobile Phone Responsive Design for E-Board */
+@media (max-width: 480px) {
+  .eboard-member {
+    height: 350px;
+  }
+
+  .eboard-member .flag-image {
+    width: 100%;
+    height: auto;
+    min-height: 100%;
+    object-fit: cover;
+  }
+
+  .eboard-member .profile-image {
+    width: 70%;
+    height: auto;
+    max-height: 100%;
+    object-fit: contain;
+    bottom: 0;
+  }
+
+  .eboard-member .member-name {
+    font-size: 2rem;
+    top: 85%;
+    right: 15%;
+  }
+
+  .eboard-member .member-position {
+    font-size: 1.6rem;
+    top: 75%;
+    right: 15%;
+  }
+
+  .eboard-title {
+    font-size: 1.8rem;
+    padding: 10px 25px;
+  }
+
+  .eboard-member .member-major p {
+    font-size: 0.85rem;
+  }
+
+  .eboard-member .adg-logo {
+    width: 12%;
+    min-width: 40px;
+  }
+}
