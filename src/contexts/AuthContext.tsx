@@ -1,21 +1,23 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { 
-  User,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  updateProfile
-} from 'firebase/auth';
-import { auth } from '../firebase';
-import { UserData, getUserData, createUserProfile } from '../services/userService';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
+import type { Session, User } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
+import { Profile } from '../types';
 
 interface AuthContextType {
+  /** The signed-in Supabase user, or null. */
   currentUser: User | null;
-  userData: UserData | null;
+  /** Public profile (name + avatar from Google). */
+  profile: Profile | null;
+  /**
+   * True when the signed-in account's email is on the admin allow-list.
+   * This only controls which buttons are SHOWN. The database enforces the
+   * real rule (Row Level Security), so flipping this in devtools gains nothing.
+   */
+  isAdmin: boolean;
+  /** True until the initial session and admin check have resolved. */
   loading: boolean;
-  signup: (email: string, password: string, name: string, birthday: string, school: string) => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  /** Starts Google sign-in. New accounts are created automatically. */
+  signInWithGoogle: (returnTo?: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -29,108 +31,91 @@ export function useAuth() {
   return context;
 }
 
-interface AuthProviderProps {
-  children: ReactNode;
+function profileFromUser(user: User): Profile {
+  const meta = user.user_metadata || {};
+  return {
+    id: user.id,
+    fullName: meta.full_name || meta.name || null,
+    avatarUrl: meta.avatar_url || meta.picture || null,
+  };
 }
 
-export function AuthProvider({ children }: AuthProviderProps) {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [userData, setUserData] = useState<UserData | null>(null);
-  const [loading, setLoading] = useState(true);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminCheckedFor, setAdminCheckedFor] = useState<string | null>(null);
 
-  /**
-   * Sign up a new user
-   */
-  async function signup(
-    email: string,
-    password: string,
-    name: string,
-    birthday: string,
-    school: string
-  ): Promise<void> {
-    try {
-      // Create authentication account
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+  const currentUser = session?.user ?? null;
+  const userId = currentUser?.id ?? null;
 
-      // Update display name in Firebase Auth
-      await updateProfile(user, {
-        displayName: name
-      });
-
-      // Create user profile in Firestore
-      await createUserProfile(user.uid, email, name, birthday, school);
-
-      // Fetch and set user data
-      const data = await getUserData();
-      setUserData(data);
-    } catch (error) {
-      console.error('Error during signup:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Log in an existing user
-   */
-  async function login(email: string, password: string): Promise<void> {
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      // User data will be fetched in the onAuthStateChanged listener
-    } catch (error) {
-      console.error('Error during login:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Log out the current user
-   */
-  async function logout(): Promise<void> {
-    try {
-      await signOut(auth);
-      setUserData(null);
-    } catch (error) {
-      console.error('Error during logout:', error);
-      throw error;
-    }
-  }
-
-  // Listen for authentication state changes
+  // Track the session. Keep this callback synchronous: calling other
+  // Supabase APIs inside onAuthStateChange can deadlock the auth client.
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      
-      if (user) {
-        // Fetch user data from Firestore
-        try {
-          const data = await getUserData();
-          setUserData(data);
-        } catch (error) {
-          console.error('Error fetching user data:', error);
-        }
-      } else {
-        setUserData(null);
-      }
-      
-      setLoading(false);
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setSession(data.session);
+      setSessionLoaded(true);
     });
-
-    return unsubscribe;
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      setSessionLoaded(true);
+    });
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
-  const value: AuthContextType = {
-    currentUser,
-    userData,
-    loading,
-    signup,
-    login,
-    logout
-  };
+  // Ask the database whether this user is an admin, once per signed-in user.
+  useEffect(() => {
+    if (!userId) {
+      setIsAdmin(false);
+      setAdminCheckedFor(null);
+      return;
+    }
+    let active = true;
+    supabase.rpc('is_admin').then(({ data, error }) => {
+      if (!active) return;
+      if (error) console.error('Could not check admin status:', error.message);
+      setIsAdmin(!error && data === true);
+      setAdminCheckedFor(userId);
+    });
+    return () => {
+      active = false;
+    };
+  }, [userId]);
 
-  return (
-    <AuthContext.Provider value={value}>
-      {!loading && children}
-    </AuthContext.Provider>
+  const signInWithGoogle = useCallback(async (returnTo: string = '/') => {
+    // Only ever return to a path on this site.
+    const path = returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/';
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}${path}`,
+        queryParams: { prompt: 'select_account' },
+      },
+    });
+    if (error) throw error;
+  }, []);
+
+  const logout = useCallback(async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  }, []);
+
+  const value = useMemo<AuthContextType>(
+    () => ({
+      currentUser,
+      profile: currentUser ? profileFromUser(currentUser) : null,
+      isAdmin: Boolean(userId) && adminCheckedFor === userId && isAdmin,
+      loading: !sessionLoaded || (Boolean(userId) && adminCheckedFor !== userId),
+      signInWithGoogle,
+      logout,
+    }),
+    [currentUser, userId, isAdmin, adminCheckedFor, sessionLoaded, signInWithGoogle, logout]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -6,7 +6,7 @@ import './Header.css';
 function Header() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, userData, logout } = useAuth();
+  const { currentUser, profile, logout } = useAuth();
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const avatarRef = useRef<HTMLDivElement>(null);
@@ -48,19 +48,8 @@ function Header() {
     setShowDropdown(!showDropdown);
   };
 
-  // Get user's initials
-  const getUserInitial = () => {
-    if (userData?.name) {
-      return userData.name.charAt(0).toUpperCase();
-    }
-    if (currentUser?.displayName) {
-      return currentUser.displayName.charAt(0).toUpperCase();
-    }
-    if (currentUser?.email) {
-      return currentUser.email.charAt(0).toUpperCase();
-    }
-    return 'U';
-  };
+  const displayName = profile?.fullName || currentUser?.email || 'User';
+  const getUserInitial = () => displayName.charAt(0).toUpperCase();
 
   return (
     <div className="Header">
@@ -103,7 +92,7 @@ function Header() {
               {showDropdown && (
                 <div ref={dropdownRef} className="user-dropdown">
                   <div className="user-info">
-                    <p className="user-name">{userData?.name || currentUser.displayName || 'User'}</p>
+                    <p className="user-name">{displayName}</p>
                     <p className="user-email">{currentUser.email}</p>
                   </div>
                   <button 
@@ -119,7 +108,7 @@ function Header() {
           ) : (
             <li 
               className={`log-in ${location.pathname === '/auth' ? 'active' : ''}`}
-              onClick={() => navigate('/auth')}
+              onClick={() => navigate('/auth', { state: { from: location.pathname } })}
             >
               <img src="https://cdn-icons-png.flaticon.com/128/6681/6681235.png" alt="Log in" />
             </li>

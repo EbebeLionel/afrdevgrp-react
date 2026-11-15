@@ -1,189 +1,143 @@
-import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, uploadBytesResumable } from 'firebase/storage';
-import { app } from '../firebase';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, BucketName } from '../lib/supabase';
 import { UploadProgress } from '../types';
 
-const storage = getStorage(app);
+// Keep these in sync with the bucket limits in supabase/migrations.
+export const MAX_EVENT_PHOTO_MB = 10;
+export const MAX_REEL_FILE_MB = 50;
+
+const EXTENSION_BY_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+};
+
+export function getFileExtension(file: File): string {
+  const fromMime = EXTENSION_BY_MIME[file.type];
+  if (fromMime) return fromMime;
+  const fromName = file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return fromName || 'bin';
+}
+
+/** `<folder>/<random>.<ext>` — unique, so uploads never overwrite each other. */
+export function buildObjectPath(folder: string, file: File): string {
+  return `${folder}/${crypto.randomUUID()}.${getFileExtension(file)}`;
+}
+
+export function getPublicUrl(bucket: BucketName, path: string): string {
+  return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+}
 
 /**
- * Upload a single file to Firebase Storage
- * @param file - File to upload
- * @param path - Storage path (e.g., 'events/userId/eventId/photo.jpg')
- * @param onProgress - Optional callback for upload progress
- * @returns Download URL of uploaded file
+ * Upload one file. Uses XMLHttpRequest against the Storage REST endpoint
+ * because supabase-js uploads don't report progress. The request carries the
+ * signed-in user's token, so the storage RLS policies decide if it's allowed.
  */
 export async function uploadFile(
-  file: File,
+  bucket: BucketName,
   path: string,
+  file: File,
   onProgress?: (progress: UploadProgress) => void
 ): Promise<string> {
-  try {
-    const storageRef = ref(storage, path);
-    
-    if (onProgress) {
-      // Use resumable upload for progress tracking
-      const uploadTask = uploadBytesResumable(storageRef, file);
-      
-      return new Promise((resolve, reject) => {
-        uploadTask.on(
-          'state_changed',
-          (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            onProgress({
-              progress: Math.round(progress),
-              status: 'uploading'
-            });
-          },
-          (error) => {
-            onProgress({
-              progress: 0,
-              status: 'error',
-              error: error.message
-            });
-            reject(error);
-          },
-          async () => {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            onProgress({
-              progress: 100,
-              status: 'complete'
-            });
-            resolve(downloadURL);
-          }
-        );
-      });
-    } else {
-      // Simple upload without progress tracking
-      const snapshot = await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      return downloadURL;
-    }
-  } catch (error) {
-    if (onProgress) {
-      onProgress({
-        progress: 0,
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Upload failed'
-      });
-    }
-    throw error;
-  }
-}
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Please sign in to upload.');
 
-/**
- * Upload multiple files to Firebase Storage
- * @param files - Array of files to upload
- * @param basePath - Base storage path (file index will be appended)
- * @param onProgress - Optional callback for individual file progress
- * @returns Array of download URLs
- */
-export async function uploadMultipleFiles(
-  files: File[],
-  basePath: string,
-  onProgress?: (index: number, progress: UploadProgress) => void
-): Promise<string[]> {
-  const uploadPromises = files.map((file, index) => {
-    const extension = file.name.split('.').pop() || 'bin';
-    const path = `${basePath}/${index}.${extension}`;
-    
-    return uploadFile(file, path, onProgress ? (progress) => {
-      onProgress(index, progress);
-    } : undefined);
-  });
-  
-  return Promise.all(uploadPromises);
-}
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const endpoint = `${SUPABASE_URL}/storage/v1/object/${bucket}/${encodedPath}`;
 
-/**
- * Delete a file from Firebase Storage
- * @param path - Storage path of file to delete
- */
-export async function deleteFile(path: string): Promise<void> {
-  try {
-    const storageRef = ref(storage, path);
-    await deleteObject(storageRef);
-  } catch (error) {
-    console.error('Error deleting file:', error);
-    throw error;
-  }
-}
+  return new Promise<string>((resolve, reject) => {
+    const fail = (message: string, statusCode?: number) => {
+      onProgress?.({ progress: 0, status: 'error', error: message });
+      reject(Object.assign(new Error(message), { statusCode }));
+    };
 
-/**
- * Delete multiple files from Firebase Storage
- * @param paths - Array of storage paths to delete
- */
-export async function deleteMultipleFiles(paths: string[]): Promise<void> {
-  const deletePromises = paths.map(path => deleteFile(path).catch(err => {
-    console.warn(`Failed to delete ${path}:`, err);
-    // Don't throw, continue with other deletions
-  }));
-  
-  await Promise.all(deletePromises);
-}
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', endpoint);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.setRequestHeader('apikey', SUPABASE_ANON_KEY);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('Cache-Control', 'max-age=31536000'); // paths are unique, so cache forever
+    xhr.setRequestHeader('x-upsert', 'false');
+    xhr.timeout = 10 * 60 * 1000;
 
-/**
- * Get the file extension from a File object
- */
-export function getFileExtension(file: File): string {
-  return file.name.split('.').pop() || 'bin';
-}
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        // Hold at 99 until the server confirms.
+        onProgress?.({
+          progress: Math.min(99, Math.round((e.loaded / e.total) * 100)),
+          status: 'uploading',
+        });
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.({ progress: 100, status: 'complete' });
+        resolve(path);
+        return;
+      }
+      let message = `Upload failed (${xhr.status})`;
+      try {
+        const body = JSON.parse(xhr.responseText);
+        if (body && body.message) message = body.message;
+      } catch {
+        /* non-JSON error body */
+      }
+      if (xhr.status === 403 || /row-level security/i.test(message)) {
+        message = 'Your account is not authorized to upload.';
+      } else if (xhr.status === 413 || /exceeded the maximum allowed size/i.test(message)) {
+        message = 'That file is too large.';
+      }
+      fail(message, xhr.status);
+    };
+    xhr.onerror = () => fail('Network error during upload. Check your connection and try again.');
+    xhr.ontimeout = () => fail('Upload timed out. Try a smaller file or a faster connection.');
 
-/**
- * Validate file size
- * @param file - File to validate
- * @param maxSizeMB - Maximum size in megabytes
- * @returns true if valid, false otherwise
- */
-export function validateFileSize(file: File, maxSizeMB: number): boolean {
-  const maxSizeBytes = maxSizeMB * 1024 * 1024;
-  return file.size <= maxSizeBytes;
-}
-
-/**
- * Validate file type
- * @param file - File to validate
- * @param allowedTypes - Array of allowed MIME types or extensions
- * @returns true if valid, false otherwise
- */
-export function validateFileType(file: File, allowedTypes: string[]): boolean {
-  return allowedTypes.some(type => {
-    if (type.startsWith('.')) {
-      return file.name.toLowerCase().endsWith(type.toLowerCase());
-    }
-    return file.type.startsWith(type);
+    onProgress?.({ progress: 0, status: 'uploading' });
+    xhr.send(file);
   });
 }
 
-/**
- * Validate image file
- */
-export function validateImage(file: File): { valid: boolean; error?: string } {
-  if (!validateFileType(file, ['image/'])) {
-    return { valid: false, error: 'File must be an image' };
+/** Best-effort delete. Never throws: a leftover file must not block the UI. */
+export async function deleteFiles(bucket: BucketName, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const { error } = await supabase.storage.from(bucket).remove(paths);
+  if (error) {
+    console.warn(`Could not remove ${paths.length} file(s) from ${bucket}:`, error.message);
   }
-  // No size limit - removed restriction
+}
+
+// ---------- validation (client-side convenience; the bucket enforces it) ----------
+
+type Validation = { valid: boolean; error?: string };
+
+const tooBig = (file: File, maxMB: number) => file.size > maxMB * 1024 * 1024;
+const sizeMB = (file: File) => (file.size / (1024 * 1024)).toFixed(1);
+
+export function validateImage(file: File, maxMB = MAX_EVENT_PHOTO_MB): Validation {
+  if (!file.type.startsWith('image/')) return { valid: false, error: 'File must be an image' };
+  if (tooBig(file, maxMB)) {
+    return { valid: false, error: `Image is ${sizeMB(file)} MB; the limit is ${maxMB} MB` };
+  }
   return { valid: true };
 }
 
-/**
- * Validate video file
- */
-export function validateVideo(file: File): { valid: boolean; error?: string } {
-  if (!validateFileType(file, ['video/'])) {
-    return { valid: false, error: 'File must be a video' };
+export function validateVideo(file: File, maxMB = MAX_REEL_FILE_MB): Validation {
+  if (!file.type.startsWith('video/')) return { valid: false, error: 'File must be a video' };
+  if (tooBig(file, maxMB)) {
+    return { valid: false, error: `Video is ${sizeMB(file)} MB; the limit is ${maxMB} MB` };
   }
-  // No size limit - removed restriction
   return { valid: true };
 }
 
-/**
- * Validate media file (image or video)
- */
-export function validateMediaFile(file: File): { valid: boolean; error?: string } {
-  if (file.type.startsWith('image/')) {
-    return validateImage(file);
-  } else if (file.type.startsWith('video/')) {
-    return validateVideo(file);
-  } else {
-    return { valid: false, error: 'File must be an image or video' };
-  }
+export function validateMediaFile(file: File): Validation {
+  if (file.type.startsWith('image/')) return validateImage(file, MAX_REEL_FILE_MB);
+  if (file.type.startsWith('video/')) return validateVideo(file);
+  return { valid: false, error: 'File must be an image or video' };
 }

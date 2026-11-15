@@ -1,46 +1,54 @@
-# Getting Started with Create React App
+# African Development Group Columbia (ADG) website
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React app (Create React App + TypeScript) backed by Supabase and deployed on
+Vercel.
 
-## Available Scripts
+- **Going live / first-time setup:** [docs/SETUP.md](docs/SETUP.md)
+- **Why the backend is built this way:** [docs/adr/0001-supabase-backend.md](docs/adr/0001-supabase-backend.md)
 
-In the project directory, you can run:
+## What the backend does
 
-### `npm start`
+| Feature | Who |
+|---|---|
+| View events, reels, comments | Everyone |
+| Sign up / sign in with Google | Everyone |
+| Like and comment on reels, delete own comments | Signed-in users |
+| Upload events (photo) and reels (photos and videos) | Admins |
+| Edit events, edit reel captions, delete events / reels / any comment | Admins |
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+Admins are the emails in the `admin_emails` table. Any admin can edit or
+delete anything another admin uploaded. The upload, edit and delete buttons
+are only drawn for admins, and the database rejects those actions from anyone
+else regardless of what the page shows.
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+## Layout
 
-### `npm test`
+```
+supabase/migrations/   database schema, security rules, storage buckets
+src/lib/supabase.ts    Supabase client
+src/contexts/          AuthContext: session, Google sign-in, isAdmin
+src/services/          eventService, reelService, storageService
+src/components/        pages
+scripts/prepare-seo.js writes robots.txt and sitemap.xml before each build
+scripts/migrate-from-firebase.mjs   one-time copy of old content
+vercel.json            hosting config
+```
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Local development
 
-### `npm run build`
+```
+copy .env.example .env.local   # then fill in the two Supabase values
+npm install
+npm start
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+`npm run build` makes the production build in `build/`.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Changed from the Firebase version
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
-
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
-
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+- Sign-in is Google only. Email/password accounts, and the birthday and
+  school fields, are gone.
+- Liking and commenting now need a sign-in (previously all anonymous visitors
+  shared one "guest" identity).
+- Old likes and comments were not migrated, because they were tied to
+  Firebase accounts.

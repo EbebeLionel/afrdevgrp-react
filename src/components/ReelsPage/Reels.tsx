@@ -1,34 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './Reels.css';
+import { useNavigate } from 'react-router-dom';
 import {
   getAllReels,
   createReel,
   deleteReel,
-  toggleReelLike,
+  updateReelCaption,
+  setReelLike,
+  getReelComments,
   addReelComment,
+  deleteReelComment,
   incrementReelViews
 } from '../../services/reelService';
-import { validateMediaFile } from '../../services/storageService';
-import { checkContentCreationPermission } from '../../services/authorizationService';
+import { validateMediaFile, MAX_REEL_FILE_MB } from '../../services/storageService';
+import { toUserMessage } from '../../lib/supabase';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { useAuth } from '../../contexts/AuthContext';
-import { Reel, MultiUploadProgress } from '../../types';
+import { Reel, Comment, MultiUploadProgress } from '../../types';
 
 const Reels: React.FC = () => {
-  const { currentUser: authUser, userData } = useAuth();
+  usePageTitle('Reels');
+  const navigate = useNavigate();
+  // isAdmin only decides which controls are shown; the database enforces it.
+  const { currentUser: authUser, isAdmin } = useAuth();
   const [reels, setReels] = useState<Reel[]>([]);
   const [currentReelIndex, setCurrentReelIndex] = useState<number | null>(null);
   const [currentMediaIndex, setCurrentMediaIndex] = useState<{ [reelId: string]: number }>({});
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showAuthorizationMessage, setShowAuthorizationMessage] = useState(false);
   const [showCommentsModal, setShowCommentsModal] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   
-  // Check user authorization
-  const userEmail = authUser?.email || null;
-  const { authorized: isAuthorized, message: authMessage } = checkContentCreationPermission(userEmail);
-  const isAuthenticated = authUser !== null;
-  const currentUserId = authUser?.uid || '';
-  const currentUserName = userData?.name || authUser?.email || 'Anonymous';
+  const currentUserId = authUser?.id || '';
   
   // Upload form state
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -37,9 +40,20 @@ const Reels: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState<MultiUploadProgress>({});
   const [uploading, setUploading] = useState(false);
   
-  // Comments state
+  // Comments state (loaded when the comments modal opens)
   const [currentReelForComments, setCurrentReelForComments] = useState<Reel | null>(null);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentText, setCommentText] = useState('');
+  const [postingComment, setPostingComment] = useState(false);
+
+  // Caption editing state (admins)
+  const [editingReel, setEditingReel] = useState<Reel | null>(null);
+  const [editCaption, setEditCaption] = useState('');
+  const [savingCaption, setSavingCaption] = useState(false);
+
+  // Reels already counted as viewed in this visit
+  const viewedReelIds = useRef<Set<string>>(new Set());
   
   // Video refs for auto-play
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
@@ -50,10 +64,11 @@ const Reels: React.FC = () => {
   // Determine if in full view
   const isFullView = currentReelIndex !== null;
   
-  // Load reels from Firebase
+  // Load reels; reload when the signed-in user changes so "liked" is correct
   useEffect(() => {
     loadReels();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUserId]);
   
   // Scroll-in animation observer
   useEffect(() => {
@@ -83,32 +98,29 @@ const Reels: React.FC = () => {
   
   const loadReels = async () => {
     try {
-      setLoading(true);
+      setLoadError('');
       const fetchedReels = await getAllReels();
       setReels(fetchedReels);
-      
-      // Initialize media index for each reel
-      const initialMediaIndex: { [key: string]: number } = {};
-      fetchedReels.forEach(reel => {
-        initialMediaIndex[reel.id] = 0;
+      // Keep each reel's current slide; default new ones to the first.
+      setCurrentMediaIndex(prev => {
+        const next: { [key: string]: number } = {};
+        fetchedReels.forEach(reel => {
+          next[reel.id] = Math.min(prev[reel.id] || 0, reel.media.length - 1);
+        });
+        return next;
       });
-      setCurrentMediaIndex(initialMediaIndex);
     } catch (error) {
       console.error('Error loading reels:', error);
-      const storedReels = localStorage.getItem('adg-reels');
-      if (storedReels) {
-        try {
-          const parsedReels = JSON.parse(storedReels);
-          setReels(parsedReels);
-        } catch (e) {
-          console.error('Error parsing stored reels:', e);
-        }
-      }
+      setLoadError('Could not load reels. Please refresh the page.');
     } finally {
       setLoading(false);
     }
   };
-  
+
+  const requireSignIn = () => {
+    navigate('/auth', { state: { from: '/reels' } });
+  };
+
   // Scroll to the clicked reel when entering full view
   useEffect(() => {
     if (isFullView && currentReelIndex !== null && !hasScrolledToInitialReel.current) {
@@ -170,12 +182,14 @@ const Reels: React.FC = () => {
     };
   }, [isFullView, currentReelIndex, reels.length]);
   
-  // Track views when entering full view
+  // Count a view the first time each reel is shown in full view
+  const currentReelId = currentReelIndex !== null ? reels[currentReelIndex]?.id : undefined;
   useEffect(() => {
-    if (currentReelIndex !== null && reels[currentReelIndex]) {
-      incrementReelViews(reels[currentReelIndex].id);
+    if (currentReelId && !viewedReelIds.current.has(currentReelId)) {
+      viewedReelIds.current.add(currentReelId);
+      incrementReelViews(currentReelId);
     }
-  }, [currentReelIndex, reels]);
+  }, [currentReelId]);
   
   const openFullView = (index: number) => {
     hasScrolledToInitialReel.current = false;
@@ -192,25 +206,20 @@ const Reels: React.FC = () => {
   };
   
   const handleUploadClick = () => {
-    if (!isAuthenticated) {
-      alert('Please sign in to upload reels');
-      return;
-    }
-    
-    if (!isAuthorized) {
-      setShowAuthorizationMessage(true);
-      return;
-    }
-    
     setShowUploadModal(true);
   };
-  
+
+  const clearSelection = () => {
+    filePreviews.forEach(url => URL.revokeObjectURL(url));
+    setSelectedFiles([]);
+    setFilePreviews([]);
+    setUploadProgress({});
+  };
+
   const handleFileSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    
     const validFiles: File[] = [];
-    const previews: string[] = [];
-    
+
     for (const file of files) {
       const validation = validateMediaFile(file);
       if (!validation.valid) {
@@ -218,30 +227,20 @@ const Reels: React.FC = () => {
         continue;
       }
       validFiles.push(file);
-      
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        previews.push(reader.result as string);
-        if (previews.length === validFiles.length) {
-          setFilePreviews([...previews]);
-        }
-      };
-      reader.readAsDataURL(file);
     }
-    
+
+    // Object URLs preview instantly without reading whole videos into memory.
+    filePreviews.forEach(url => URL.revokeObjectURL(url));
     setSelectedFiles(validFiles);
+    setFilePreviews(validFiles.map(file => URL.createObjectURL(file)));
+    setUploadProgress({});
   };
-  
+
   const handleReelUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (selectedFiles.length === 0 || !caption.trim()) {
       alert('Please select at least one media file and add a caption');
-      return;
-    }
-    
-    if (!currentUserId || !isAuthorized) {
-      alert('You are not authorized to upload content');
       return;
     }
     
@@ -255,81 +254,81 @@ const Reels: React.FC = () => {
       setUploadProgress(initialProgress);
       
       // Create reel with progress tracking
-      await createReel(
-        caption,
-        selectedFiles,
-        currentUserId,
-        currentUserName,
-        (index, progressData) => {
-          setUploadProgress(prev => ({
-            ...prev,
-            [index]: {
-              progress: progressData.progress,
-              status: progressData.status as 'uploading' | 'complete' | 'error',
-              ...((progressData as any).error && { error: (progressData as any).error })
-            }
-          }));
-        }
-      );
-      
-      // Mark all as complete
-      const completeProgress: MultiUploadProgress = {};
-      selectedFiles.forEach((_, index) => {
-        completeProgress[index] = { progress: 100, status: 'complete' };
+      await createReel(caption, selectedFiles, (index, progressData) => {
+        setUploadProgress(prev => ({ ...prev, [index]: progressData }));
       });
-      setUploadProgress(completeProgress);
-      
-      alert('Reel uploaded successfully!');
+
       await loadReels();
-      
-      setSelectedFiles([]);
-      setFilePreviews([]);
+      clearSelection();
       setCaption('');
-      setUploading(false);
       setShowUploadModal(false);
-      setUploadProgress({});
     } catch (error) {
       console.error('Error uploading reel:', error);
+      alert(toUserMessage(error, 'Failed to upload reel. Please try again.'));
+    } finally {
       setUploading(false);
-      alert('Failed to upload reel. Please try again.');
     }
   };
   
-  const handleLike = async (reelId: string) => {
+  const applyLike = (reelId: string, liked: boolean) => {
+    setReels(current => current.map(reel =>
+      reel.id === reelId && reel.likedByMe !== liked
+        ? { ...reel, likedByMe: liked, likes: Math.max(0, reel.likes + (liked ? 1 : -1)) }
+        : reel
+    ));
+  };
+
+  const handleLike = async (reel: Reel) => {
+    if (!currentUserId) {
+      requireSignIn();
+      return;
+    }
+    const liked = !reel.likedByMe;
+    applyLike(reel.id, liked); // optimistic
     try {
-      const userId = currentUserId || 'guest';
-      await toggleReelLike(reelId, userId);
-      
-      setReels(reels.map(reel => {
-        if (reel.id === reelId) {
-          const hasLiked = reel.likedBy.includes(userId);
-          return {
-            ...reel,
-            likes: hasLiked ? reel.likes - 1 : reel.likes + 1,
-            likedBy: hasLiked 
-              ? reel.likedBy.filter(id => id !== userId)
-              : [...reel.likedBy, userId]
-          };
-        }
-        return reel;
-      }));
+      await setReelLike(reel.id, liked);
     } catch (error) {
       console.error('Error toggling like:', error);
+      applyLike(reel.id, !liked); // revert
     }
   };
-  
+
+  const bumpCommentCount = (reelId: string, delta: number) => {
+    setReels(current => current.map(reel =>
+      reel.id === reelId ? { ...reel, commentCount: Math.max(0, reel.commentCount + delta) } : reel
+    ));
+  };
+
   const handleComment = async (reelId: string, text: string) => {
-    if (!text.trim()) return;
-    
+    if (!text.trim() || postingComment) return;
+    if (!currentUserId) {
+      requireSignIn();
+      return;
+    }
+
     try {
-      const userId = currentUserId || 'guest';
-      const username = currentUserName || 'Anonymous';
-      
-      await addReelComment(reelId, userId, username, text);
-      await loadReels();
+      setPostingComment(true);
+      const comment = await addReelComment(reelId, text);
+      setComments(current => [...current, comment]);
+      bumpCommentCount(reelId, 1);
       setCommentText('');
     } catch (error) {
       console.error('Error adding comment:', error);
+      alert(toUserMessage(error, 'Could not post your comment. Please try again.'));
+    } finally {
+      setPostingComment(false);
+    }
+  };
+
+  const handleDeleteComment = async (reelId: string, comment: Comment) => {
+    if (!window.confirm('Delete this comment?')) return;
+    try {
+      await deleteReelComment(comment.id);
+      setComments(current => current.filter(c => c.id !== comment.id));
+      bumpCommentCount(reelId, -1);
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      alert(toUserMessage(error, 'Could not delete the comment.'));
     }
   };
   
@@ -347,36 +346,67 @@ const Reels: React.FC = () => {
     }
   };
   
-  const openComments = (reel: Reel) => {
+  const openComments = async (reel: Reel) => {
     setCurrentReelForComments(reel);
+    setComments([]);
+    setCommentText('');
     setShowCommentsModal(true);
-  };
-  
-  const handleDeleteReel = async (reelId: string, uploadedBy: string) => {
-    if (!isAuthenticated || !isAuthorized) {
-      setShowAuthorizationMessage(true);
-      return;
+    try {
+      setCommentsLoading(true);
+      setComments(await getReelComments(reel.id));
+    } catch (error) {
+      console.error('Error loading comments:', error);
+    } finally {
+      setCommentsLoading(false);
     }
-    
-    if (window.confirm('Are you sure you want to delete this reel?')) {
-      try {
-        await deleteReel(reelId, uploadedBy);
-        alert('Reel deleted successfully!');
-        await loadReels();
-        
-        if (currentReelIndex !== null && currentReelIndex >= reels.length - 1) {
-          setCurrentReelIndex(Math.max(0, currentReelIndex - 1));
-        }
-      } catch (error) {
-        console.error('Error deleting reel:', error);
-        alert('Failed to delete reel. Please try again.');
+  };
+
+  const openCaptionEditor = (reel: Reel) => {
+    setEditingReel(reel);
+    setEditCaption(reel.caption);
+  };
+
+  const handleCaptionSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingReel) return;
+    try {
+      setSavingCaption(true);
+      const newCaption = editCaption.trim();
+      await updateReelCaption(editingReel.id, newCaption);
+      setReels(current => current.map(reel =>
+        reel.id === editingReel.id ? { ...reel, caption: newCaption } : reel
+      ));
+      setEditingReel(null);
+    } catch (error) {
+      console.error('Error updating caption:', error);
+      alert(toUserMessage(error, 'Could not update the caption. Please try again.'));
+    } finally {
+      setSavingCaption(false);
+    }
+  };
+
+  const handleDeleteReel = async (reel: Reel) => {
+    if (!window.confirm('Delete this reel? This cannot be undone.')) return;
+    try {
+      await deleteReel(reel);
+      const remaining = reels.filter(r => r.id !== reel.id);
+      setReels(remaining);
+      if (remaining.length === 0) {
+        closeFullView();
+      } else if (currentReelIndex !== null && currentReelIndex >= remaining.length) {
+        setCurrentReelIndex(remaining.length - 1);
       }
+    } catch (error) {
+      console.error('Error deleting reel:', error);
+      alert(toUserMessage(error, 'Failed to delete reel. Please try again.'));
     }
   };
-  
+
   const removeFileFromSelection = (index: number) => {
+    URL.revokeObjectURL(filePreviews[index]);
     setSelectedFiles(selectedFiles.filter((_, i) => i !== index));
     setFilePreviews(filePreviews.filter((_, i) => i !== index));
+    setUploadProgress({});
   };
   
   return (
@@ -384,27 +414,33 @@ const Reels: React.FC = () => {
       <div className="reels-content">
         {!isFullView && <h1 className="reels-title">ADG Reels</h1>}
         
-        <button
-          className="upload-reel-btn"
-          onClick={handleUploadClick}
-          title="Upload Reel"
-        >
-          +
-        </button>
+        {isAdmin && (
+          <button
+            className="upload-reel-btn"
+            onClick={handleUploadClick}
+            title="Upload Reel"
+          >
+            +
+          </button>
+        )}
         
         {loading ? (
           <div className="loading-container">
             <p>Loading reels...</p>
           </div>
+        ) : loadError ? (
+          <div className="no-reels">
+            <p>{loadError}</p>
+          </div>
         ) : reels.length === 0 ? (
           <div className="no-reels">
-            <p>No reels yet. Be the first to upload!</p>
+            <p>No reels yet. Check back soon!</p>
           </div>
         ) : !isFullView ? (
           /* Card Grid View */
           <div className="reels-grid">
             {reels.map((reel, index) => {
-              const mediaIndex = currentMediaIndex[reel.id] || 0;
+              const mediaIndex = Math.min(currentMediaIndex[reel.id] || 0, reel.media.length - 1);
               const currentMedia = reel.media[mediaIndex];
               
               return (
@@ -444,7 +480,7 @@ const Reels: React.FC = () => {
                     
                     <div className="reel-card-stats">
                       <span>❤️ {reel.likes}</span>
-                      <span>💬 {reel.comments.length}</span>
+                      <span>💬 {reel.commentCount}</span>
                       <span>👁️ {reel.views}</span>
                     </div>
                   </div>
@@ -460,7 +496,7 @@ const Reels: React.FC = () => {
             </button>
             
             {reels.map((reel, index) => {
-              const mediaIndex = currentMediaIndex[reel.id] || 0;
+              const mediaIndex = Math.min(currentMediaIndex[reel.id] || 0, reel.media.length - 1);
               const currentMedia = reel.media[mediaIndex];
               
               return (
@@ -546,11 +582,12 @@ const Reels: React.FC = () => {
                     
                     <div className="fullview-actions">
                       <button
-                        className={`action-btn like-btn ${reel.likedBy.includes(currentUserId || 'guest') ? 'liked' : ''}`}
-                        onClick={() => handleLike(reel.id)}
+                        className={`action-btn like-btn ${reel.likedByMe ? 'liked' : ''}`}
+                        onClick={() => handleLike(reel)}
+                        title={currentUserId ? 'Like' : 'Sign in to like'}
                       >
                         <span className="action-icon">
-                          {reel.likedBy.includes(currentUserId || 'guest') ? '❤️' : '🤍'}
+                          {reel.likedByMe ? '❤️' : '🤍'}
                         </span>
                         <span className="action-count">{reel.likes}</span>
                       </button>
@@ -560,7 +597,7 @@ const Reels: React.FC = () => {
                         onClick={() => openComments(reel)}
                       >
                         <span className="action-icon">💬</span>
-                        <span className="action-count">{reel.comments.length}</span>
+                        <span className="action-count">{reel.commentCount}</span>
                       </button>
                       
                       <button className="action-btn view-btn">
@@ -568,13 +605,23 @@ const Reels: React.FC = () => {
                         <span className="action-count">{reel.views}</span>
                       </button>
                       
-                      {isAuthenticated && isAuthorized && (
-                        <button 
-                          className="action-btn delete-btn"
-                          onClick={() => handleDeleteReel(reel.id, reel.uploadedBy)}
-                        >
-                          <span className="action-icon">🗑️</span>
-                        </button>
+                      {isAdmin && (
+                        <>
+                          <button
+                            className="action-btn edit-btn"
+                            onClick={() => openCaptionEditor(reel)}
+                            title="Edit caption"
+                          >
+                            <span className="action-icon">✏️</span>
+                          </button>
+                          <button
+                            className="action-btn delete-btn"
+                            onClick={() => handleDeleteReel(reel)}
+                            title="Delete reel"
+                          >
+                            <span className="action-icon">🗑️</span>
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -585,33 +632,39 @@ const Reels: React.FC = () => {
         )}
       </div>
       
-      {/* Authorization Message Modal */}
-      {showAuthorizationMessage && (
-        <div className="modal-overlay" onClick={() => setShowAuthorizationMessage(false)}>
-          <div className="modal-content auth-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowAuthorizationMessage(false)}>×</button>
-            <h2>🔒 Authorization Required</h2>
-            <div className="auth-message">
-              <p>{authMessage}</p>
-              <p className="auth-details">
-                You are currently signed in as: <strong>{userEmail}</strong>
-              </p>
-              <p className="auth-contact">
-                To request upload access, please contact an ADG administrator.
-              </p>
-            </div>
-            <button
-              className="auth-submit-btn"
-              onClick={() => setShowAuthorizationMessage(false)}
-            >
-              Close
-            </button>
+      {/* Edit Caption Modal (admins only) */}
+      {editingReel && isAdmin && (
+        <div className="modal-overlay" onClick={() => !savingCaption && setEditingReel(null)}>
+          <div className="modal-content upload-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setEditingReel(null)} disabled={savingCaption}>×</button>
+            <h2>Edit Caption</h2>
+            <form onSubmit={handleCaptionSave}>
+              <div className="form-group">
+                <label>Caption *</label>
+                <textarea
+                  value={editCaption}
+                  onChange={(e) => setEditCaption(e.target.value)}
+                  rows={4}
+                  maxLength={2200}
+                  required
+                  autoFocus
+                  disabled={savingCaption}
+                />
+              </div>
+              <button
+                type="submit"
+                className="upload-submit-btn"
+                disabled={savingCaption || !editCaption.trim() || editCaption.trim() === editingReel.caption}
+              >
+                {savingCaption ? 'Saving...' : 'Save Caption'}
+              </button>
+            </form>
           </div>
         </div>
       )}
-      
-      {/* Upload Modal */}
-      {showUploadModal && (
+
+      {/* Upload Modal (admins only) */}
+      {showUploadModal && isAdmin && (
         <div className="modal-overlay" onClick={() => !uploading && setShowUploadModal(false)}>
           <div className="modal-content upload-modal" onClick={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => !uploading && setShowUploadModal(false)} disabled={uploading}>×</button>
@@ -627,7 +680,7 @@ const Reels: React.FC = () => {
                   required={selectedFiles.length === 0}
                   disabled={uploading}
                 />
-                <small>Select multiple photos and/or videos.</small>
+                <small>Select multiple photos and/or videos. Up to {MAX_REEL_FILE_MB}MB per file.</small>
                 
                 {filePreviews.length > 0 && (
                   <div className="file-previews">
@@ -670,6 +723,7 @@ const Reels: React.FC = () => {
                   onChange={(e) => setCaption(e.target.value)}
                   placeholder="Write a caption for your reel..."
                   rows={3}
+                  maxLength={2200}
                   required
                   disabled={uploading}
                 />
@@ -695,10 +749,12 @@ const Reels: React.FC = () => {
             <h2>Comments</h2>
             
             <div className="comments-list">
-              {currentReelForComments.comments.length === 0 ? (
+              {commentsLoading ? (
+                <p className="no-comments">Loading comments...</p>
+              ) : comments.length === 0 ? (
                 <p className="no-comments">No comments yet. Be the first to comment!</p>
               ) : (
-                currentReelForComments.comments.map(comment => (
+                comments.map(comment => (
                   <div key={comment.id} className="comment-item">
                     <div className="comment-avatar">
                       {comment.username.charAt(0)}
@@ -707,31 +763,50 @@ const Reels: React.FC = () => {
                       <span className="comment-username">{comment.username}</span>
                       <p className="comment-text">{comment.text}</p>
                     </div>
+                    {(isAdmin || comment.userId === currentUserId) && (
+                      <button
+                        className="comment-delete-btn"
+                        onClick={() => handleDeleteComment(currentReelForComments.id, comment)}
+                        title="Delete comment"
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
                 ))
               )}
             </div>
             
-            <div className="comment-input-container">
-              <input
-                type="text"
-                className="comment-input"
-                placeholder="Add a comment..."
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    handleComment(currentReelForComments.id, commentText);
-                  }
-                }}
-              />
-              <button 
-                className="comment-submit-btn"
-                onClick={() => handleComment(currentReelForComments.id, commentText)}
-              >
-                Post
-              </button>
-            </div>
+            {currentUserId ? (
+              <div className="comment-input-container">
+                <input
+                  type="text"
+                  className="comment-input"
+                  placeholder="Add a comment..."
+                  value={commentText}
+                  maxLength={1000}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleComment(currentReelForComments.id, commentText);
+                    }
+                  }}
+                />
+                <button
+                  className="comment-submit-btn"
+                  disabled={postingComment || !commentText.trim()}
+                  onClick={() => handleComment(currentReelForComments.id, commentText)}
+                >
+                  Post
+                </button>
+              </div>
+            ) : (
+              <div className="comment-input-container">
+                <button className="comment-submit-btn" onClick={requireSignIn}>
+                  Sign in to comment
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

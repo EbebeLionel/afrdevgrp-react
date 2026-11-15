@@ -1140,3 +1140,21 @@
     font-size: 1.1rem;
   }
 }
+/* Comment moderation (author or admin) */
+.comment-delete-btn {
+  margin-left: auto;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 50%;
+}
+
+.comment-delete-btn:hover {
+  color: #E74C3C;
+  background: rgba(231, 76, 60, 0.1);
+}
