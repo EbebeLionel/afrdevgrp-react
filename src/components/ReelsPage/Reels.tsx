@@ -15,12 +15,15 @@ import {
 import { validateMediaFile, MAX_REEL_FILE_MB } from '../../services/storageService';
 import { toUserMessage } from '../../lib/supabase';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useConfirm, useFeedback } from '../common/Feedback';
 import { useAuth } from '../../contexts/AuthContext';
 import { Reel, Comment, MultiUploadProgress } from '../../types';
 
 const Reels: React.FC = () => {
   usePageTitle('Reels');
   const navigate = useNavigate();
+  const { show } = useFeedback();
+  const confirm = useConfirm();
   // isAdmin only decides which controls are shown; the database enforces it.
   const { currentUser: authUser, isAdmin } = useAuth();
   const [reels, setReels] = useState<Reel[]>([]);
@@ -223,7 +226,7 @@ const Reels: React.FC = () => {
     for (const file of files) {
       const validation = validateMediaFile(file);
       if (!validation.valid) {
-        alert(`${file.name}: ${validation.error}`);
+        show(`${file.name}: ${validation.error}`, 'error');
         continue;
       }
       validFiles.push(file);
@@ -240,7 +243,7 @@ const Reels: React.FC = () => {
     e.preventDefault();
     
     if (selectedFiles.length === 0 || !caption.trim()) {
-      alert('Please select at least one media file and add a caption');
+      show('Add at least one photo or video, and write a caption, before uploading.', 'error');
       return;
     }
     
@@ -264,7 +267,7 @@ const Reels: React.FC = () => {
       setShowUploadModal(false);
     } catch (error) {
       console.error('Error uploading reel:', error);
-      alert(toUserMessage(error, 'Failed to upload reel. Please try again.'));
+      show(toUserMessage(error, 'The reel could not be uploaded. Your files are still selected, so try again.'), 'error');
     } finally {
       setUploading(false);
     }
@@ -314,21 +317,22 @@ const Reels: React.FC = () => {
       setCommentText('');
     } catch (error) {
       console.error('Error adding comment:', error);
-      alert(toUserMessage(error, 'Could not post your comment. Please try again.'));
+      show(toUserMessage(error, 'Your comment was not posted. Your text is still in the box.'), 'error');
     } finally {
       setPostingComment(false);
     }
   };
 
   const handleDeleteComment = async (reelId: string, comment: Comment) => {
-    if (!window.confirm('Delete this comment?')) return;
+    const ok = await confirm({ title: 'Delete this comment?', message: 'It will be removed for everyone.', confirmLabel: 'Delete comment', danger: true });
+    if (!ok) return;
     try {
       await deleteReelComment(comment.id);
       setComments(current => current.filter(c => c.id !== comment.id));
       bumpCommentCount(reelId, -1);
     } catch (error) {
       console.error('Error deleting comment:', error);
-      alert(toUserMessage(error, 'Could not delete the comment.'));
+      show(toUserMessage(error, 'The comment could not be deleted. Please try again.'), 'error');
     }
   };
   
@@ -377,20 +381,23 @@ const Reels: React.FC = () => {
         reel.id === editingReel.id ? { ...reel, caption: newCaption } : reel
       ));
       setEditingReel(null);
+      show('Caption updated.', 'success');
     } catch (error) {
       console.error('Error updating caption:', error);
-      alert(toUserMessage(error, 'Could not update the caption. Please try again.'));
+      show(toUserMessage(error, 'The caption was not saved. Please try again.'), 'error');
     } finally {
       setSavingCaption(false);
     }
   };
 
   const handleDeleteReel = async (reel: Reel) => {
-    if (!window.confirm('Delete this reel? This cannot be undone.')) return;
+    const ok = await confirm({ title: 'Delete this reel?', message: 'Its photos, videos, likes and comments will be removed for everyone. This cannot be undone.', confirmLabel: 'Delete reel', danger: true });
+    if (!ok) return;
     try {
       await deleteReel(reel);
       const remaining = reels.filter(r => r.id !== reel.id);
       setReels(remaining);
+      show('Reel deleted.', 'success');
       if (remaining.length === 0) {
         closeFullView();
       } else if (currentReelIndex !== null && currentReelIndex >= remaining.length) {
@@ -398,7 +405,7 @@ const Reels: React.FC = () => {
       }
     } catch (error) {
       console.error('Error deleting reel:', error);
-      alert(toUserMessage(error, 'Failed to delete reel. Please try again.'));
+      show(toUserMessage(error, 'The reel could not be deleted. Please try again.'), 'error');
     }
   };
 

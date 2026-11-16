@@ -21,9 +21,10 @@ body {
 }
 
 .home-content {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 40px 20px;
+  width: 100%;
+  margin: 0;
+  padding: 40px 0;
+  box-sizing: border-box;
   background:
     radial-gradient(circle, rgba(231, 225, 225, 0.49) 40%, rgba(236, 231, 192, 0.8) 80%),
     url('../../assets/Africa-image-final.png');
@@ -55,6 +56,10 @@ body {
   display: flex;
   gap: 30px;
   align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+  /* Content runs edge to edge; this is only enough inset to keep text off the glass */
+  padding: 0 clamp(12px, 2vw, 32px);
 }
 
 .text-content {
@@ -219,10 +224,10 @@ body {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 0;
-  width: 85%;
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
-  border-radius: 10px;
+  border-radius: 0;
   overflow: hidden;
 }
 

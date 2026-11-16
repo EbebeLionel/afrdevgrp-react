@@ -47,8 +47,10 @@ security rules, and the two storage buckets (`event-photos`, `reel-media`).
 
 1. **Authentication > Sign In / Providers > Google**: enable it, paste the
    Client ID and secret, save.
-2. **Authentication > Sign In / Providers > Email**: turn it **off**. Google
-   is the only way in, which guarantees every email is verified by Google.
+2. **Authentication > Sign In / Providers > Email**: leave it **on**, with
+   **Confirm email** switched on. People can sign up with Google or with an
+   email and password. Email sign-ups must click the confirmation link before
+   they count as signed in, which admin checks depend on.
 3. **Authentication > URL Configuration**:
    - Site URL: `https://african-development-group-columbia.vercel.app`
    - Redirect URLs: add `https://african-development-group-columbia.vercel.app/**`
@@ -70,20 +72,48 @@ npm start
 Sign in with a board email. The **+ Upload** buttons and the edit/delete
 controls should appear. Sign in with a personal Gmail: they should not.
 
-## 5. Copy the existing events and reels over from Firebase (5 min)
+## 5. Copy the existing events and reels over from Firebase (10 min)
 
-In **Project Settings > API**, copy the **service_role** key (treat it like a
-password: it bypasses every security rule). In PowerShell:
+The script needs nothing from the Firebase console. It reads the public events
+and reels, then downloads each photo and video from its public link. The old
+Firebase rules allow that public read, so leave Firebase as it is for now.
 
-```
-$env:SUPABASE_URL = "https://YOUR-REF.supabase.co"
+**Do not use the Firebase settings in the screenshot.** The **General** page
+only shows the web config you already have, and **Service accounts** creates
+private admin keys the migration does not need.
+
+**Step 1: get the Supabase service role key.** In the Supabase dashboard, open
+**Project Settings > API** and click **Reveal** next to **service_role**. This
+key bypasses every security rule, so treat it like a password and never add it
+to Vercel or `.env.local`.
+
+**Step 2: run the migration.** Open PowerShell in the `afrdevgrp-react` folder
+and run:
+
+```powershell
+$env:SUPABASE_URL = "https://yxobreeagjiyqvlfvzbm.supabase.co"
 $env:SUPABASE_SERVICE_ROLE_KEY = "paste-it-here"
 node scripts/migrate-from-firebase.mjs --dry-run
 node scripts/migrate-from-firebase.mjs
 ```
 
-It copies the 10 events and 4 reels with their photos and videos. It is safe
-to run twice. Likes and comments are not copied (see the README).
+The `--dry-run` line only lists what would be copied. Check that it finds
+**10 events** and **4 reels**, then run the second command to copy them. Each
+file is listed as it uploads, and the script ends with a summary.
+
+**Step 3: check the result.** In Supabase, open **Table Editor**. `events`
+should have 10 rows, `reels` should have 4, and `reel_media` should have 8
+(3 + 1 + 1 + 3 files). Open the events and reels pages on the site to see the
+photos and videos.
+
+**Step 4: clear the key from your terminal.**
+
+```powershell
+Remove-Item Env:SUPABASE_SERVICE_ROLE_KEY
+```
+
+Running the migration again is safe: anything already copied is skipped.
+Likes and comments are not copied (see the README).
 
 ## 6. Deploy on Vercel (10 min)
 

@@ -45,10 +45,10 @@ the open write rule.
 
 ## Key design points
 
-- **Identity.** Google is the only sign-in method, so emails are verified.
-  `is_admin()` reads the email from `auth.users` (not the token) and also
-  requires `email_confirmed_at`, so it stays safe if another provider is ever
-  enabled.
+- **Identity.** People sign in with Google or with email and password. Email
+  sign-ups must confirm their address first. `is_admin()` reads the email from
+  `auth.users` (not the token) and requires `email_confirmed_at`, so an admin
+  email that was never verified can't gain admin rights.
 - **Shared ownership.** Policies check `is_admin()` and never `created_by`.
   Files live at `<content id>/<random>.<ext>`, not under a user id, so
   ownership is by content. `created_by` / `updated_by` are set by triggers

@@ -204,3 +204,37 @@
   height: 22px;
   flex-shrink: 0;
 }
+
+/* Email sign-in */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 22px 0;
+  color: #999;
+  font-size: 0.9rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e0e0e0;
+}
+
+.auth-notice {
+  color: #2e7d32;
+  font-size: 0.95rem;
+  margin-bottom: 15px;
+  padding: 12px;
+  background: #E8F5E9;
+  border-radius: 5px;
+  text-align: center;
+}
+
+.auth-fine-print {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: #888;
+}

@@ -46,8 +46,8 @@ npm start
 
 ## Changed from the Firebase version
 
-- Sign-in is Google only. Email/password accounts, and the birthday and
-  school fields, are gone.
+- Sign-in uses Google or email and password (email accounts must confirm
+  their address). The birthday and school fields are gone.
 - Liking and commenting now need a sign-in (previously all anonymous visitors
   shared one "guest" identity).
 - Old likes and comments were not migrated, because they were tied to

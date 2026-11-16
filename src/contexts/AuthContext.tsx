@@ -18,6 +18,17 @@ interface AuthContextType {
   loading: boolean;
   /** Starts Google sign-in. New accounts are created automatically. */
   signInWithGoogle: (returnTo?: string) => Promise<void>;
+  /**
+   * Email + password. Sign-up returns `needsConfirmation: true` when Supabase
+   * is waiting for the person to click the link in their email.
+   */
+  signUpWithEmail: (
+    email: string,
+    password: string,
+    name: string,
+    returnTo?: string
+  ) => Promise<{ needsConfirmation: boolean }>;
+  signInWithEmail: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -100,6 +111,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }, []);
 
+  const signUpWithEmail = useCallback(
+    async (email: string, password: string, name: string, returnTo: string = '/') => {
+      const path = returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/';
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          // Read by the handle_new_user trigger to fill in the profile name.
+          data: { full_name: name.trim() },
+          emailRedirectTo: `${window.location.origin}${path}`,
+        },
+      });
+      if (error) throw error;
+      // No session yet means the confirmation email must be clicked first.
+      return { needsConfirmation: !data.session };
+    },
+    []
+  );
+
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) throw error;
+  }, []);
+
   const logout = useCallback(async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
@@ -112,9 +147,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAdmin: Boolean(userId) && adminCheckedFor === userId && isAdmin,
       loading: !sessionLoaded || (Boolean(userId) && adminCheckedFor !== userId),
       signInWithGoogle,
+      signUpWithEmail,
+      signInWithEmail,
       logout,
     }),
-    [currentUser, userId, isAdmin, adminCheckedFor, sessionLoaded, signInWithGoogle, logout]
+    [
+      currentUser,
+      userId,
+      isAdmin,
+      adminCheckedFor,
+      sessionLoaded,
+      signInWithGoogle,
+      signUpWithEmail,
+      signInWithEmail,
+      logout,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

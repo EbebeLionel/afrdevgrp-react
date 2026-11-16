@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './Events.css';
 import {
   getAllEvents,
@@ -13,421 +13,453 @@ import { validateImage, MAX_EVENT_PHOTO_MB } from '../../services/storageService
 import { toUserMessage } from '../../lib/supabase';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useAuth } from '../../contexts/AuthContext';
+import { useConfirm, useFeedback } from '../common/Feedback';
 import { Event as EventType, EventFormData, UploadProgress } from '../../types';
+
+type Status = 'ongoing' | 'upcoming' | 'past';
+
+const EMPTY_FORM = {
+  name: '',
+  type: 'g-body' as 'g-body' | 'major',
+  date: '',
+  startTime: '',
+  endTime: '',
+  description: '',
+  link: '',
+};
+
+// ----------------------------------------------------------------------------
+// One event card. Defined at module level so React keeps the same component
+// between renders (a component created inside Events would be remounted on
+// every state change, which is what made cards vanish after Cancel).
+// ----------------------------------------------------------------------------
+interface EventCardProps {
+  event: EventType;
+  status: Status;
+  isAdmin: boolean;
+  onEdit: (event: EventType) => void;
+  onDelete: (event: EventType) => void;
+}
+
+const EventCard: React.FC<EventCardProps> = ({ event, status, isAdmin, onEdit, onDelete }) => (
+  <article className={`event-card ${event.type === 'major' ? 'major-event' : 'gbody-event'}`}>
+    <div className="event-image-container">
+      <img src={event.photoUrl} alt={event.name} className="event-image" loading="lazy" />
+      {event.type === 'major' && <div className="major-badge">MAJOR EVENT</div>}
+      {status === 'ongoing' && <div className="live-badge">LIVE NOW</div>}
+      {isAdmin && (
+        <div className="event-actions">
+          <button
+            type="button"
+            className="edit-btn"
+            onClick={() => onEdit(event)}
+            title="Edit event"
+            aria-label={`Edit ${event.name}`}
+          >
+            ✏️
+          </button>
+          <button
+            type="button"
+            className="delete-btn"
+            onClick={() => onDelete(event)}
+            title="Delete event"
+            aria-label={`Delete ${event.name}`}
+          >
+            🗑️
+          </button>
+        </div>
+      )}
+    </div>
+    <div className="event-details">
+      <h3 className="event-name">{event.name}</h3>
+      <div className="event-datetime">
+        <span className="event-date">📅 {formatEventDate(event.date)}</span>
+        <span className="event-time">
+          🕐 {formatEventTime(event.startTime)} – {formatEventTime(event.endTime)}
+        </span>
+      </div>
+      {event.description && <p className="event-description">{event.description}</p>}
+      {event.link && (
+        <a href={event.link} target="_blank" rel="noopener noreferrer" className="event-link">
+          View event details →
+        </a>
+      )}
+    </div>
+  </article>
+);
 
 const Events: React.FC = () => {
   usePageTitle('Events');
   // isAdmin only decides which controls are shown; the database enforces it.
   const { isAdmin } = useAuth();
+  const { show } = useFeedback();
+  const confirm = useConfirm();
+
   const [events, setEvents] = useState<EventType[]>([]);
-  const [showUploadModal, setShowUploadModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
-  
-  // Upload form state
-  const [eventName, setEventName] = useState('');
-  const [eventType, setEventType] = useState<'g-body' | 'major'>('g-body');
-  const [eventDate, setEventDate] = useState('');
-  const [eventStartTime, setEventStartTime] = useState('');
-  const [eventEndTime, setEventEndTime] = useState('');
-  const [eventDescription, setEventDescription] = useState('');
-  const [eventLink, setEventLink] = useState('');
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [photoPreview, setPhotoPreview] = useState('');
-  
-  // Editing state
+  const hasLoaded = useRef(false);
+
+  const [showModal, setShowModal] = useState(false);
   const [editingEvent, setEditingEvent] = useState<EventType | null>(null);
-  
-  // Load events on mount
-  useEffect(() => {
-    loadEvents();
-  }, []);
-  
-  // Scroll-in animation observer for sections and cards
-  useEffect(() => {
-    const observerOptions = {
-      threshold: 0.1,
-      rootMargin: '0px 0px -50px 0px'
-    };
-    
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('animate-in');
-          observer.unobserve(entry.target);
-        }
-      });
-    }, observerOptions);
-    
-    // Observe event sections
-    const sections = document.querySelectorAll('.events-section');
-    sections.forEach((section) => {
-      observer.observe(section);
-    });
-    
-    // Observe event cards with staggered delays
-    const cards = document.querySelectorAll('.event-card');
-    cards.forEach((card, index) => {
-      (card as HTMLElement).style.transitionDelay = `${(index % 3) * 0.1}s`;
-      observer.observe(card);
-    });
-    
-    return () => observer.disconnect();
-  }, [events]);
-  
-  const loadEvents = async () => {
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoError, setPhotoError] = useState('');
+  const [objectUrl, setObjectUrl] = useState('');
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const saving = progress?.status === 'uploading';
+
+  // ---- loading -------------------------------------------------------------
+
+  const loadEvents = useCallback(async () => {
+    // Only show the loading state the first time. Refreshing after a save or
+    // cancel keeps the current list on screen, so nothing flickers or vanishes.
+    if (!hasLoaded.current) setLoading(true);
     try {
-      setLoading(true);
       setLoadError('');
       setEvents(await getAllEvents());
+      hasLoaded.current = true;
     } catch (error) {
       console.error('Error loading events:', error);
-      setLoadError('Could not load events. Please refresh the page.');
+      setLoadError('We could not load events. Check your connection and try again.');
     } finally {
       setLoading(false);
     }
-  };
-  
-  const handleUploadClick = () => {
-    resetForm();
-    setShowUploadModal(true);
-  };
-  
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      // Validate image
-      const validation = validateImage(file);
-      if (!validation.valid) {
-        alert(validation.error || 'Invalid image file');
-        return;
-      }
-      
-      setPhotoFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPhotoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-  
-  const handleEventUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const eventData: EventFormData = {
-      name: eventName,
-      type: eventType,
-      date: eventDate,
-      startTime: eventStartTime,
-      endTime: eventEndTime,
-      description: eventDescription,
-      link: eventLink || undefined
-    };
-    
-    if (!editingEvent && !photoFile) {
-      alert('Please select a photo');
+  }, []);
+
+  useEffect(() => {
+    loadEvents();
+  }, [loadEvents]);
+
+  // ---- photo preview -------------------------------------------------------
+
+  // Preview a newly chosen photo, and release its memory when it changes.
+  useEffect(() => {
+    if (!photoFile) {
+      setObjectUrl('');
       return;
     }
-    
+    const url = URL.createObjectURL(photoFile);
+    setObjectUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photoFile]);
+
+  const previewSrc = objectUrl || editingEvent?.photoUrl || '';
+
+  // ---- modal ---------------------------------------------------------------
+
+  const resetForm = () => {
+    setForm(EMPTY_FORM);
+    setPhotoFile(null);
+    setPhotoError('');
+    setEditingEvent(null);
+    setProgress(null);
+  };
+
+  /**
+   * Closes the form without saving. Cancel, the × button, clicking outside and
+   * Escape all go through here. It reloads the list, the same as a save does,
+   * so the events are back on screen straight away.
+   */
+  const closeModal = useCallback(() => {
+    if (saving) return;
+    setShowModal(false);
+    resetForm();
+    loadEvents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saving, loadEvents]);
+
+  useEffect(() => {
+    if (!showModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeModal();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showModal, closeModal]);
+
+  const openNewEvent = () => {
+    resetForm();
+    setShowModal(true);
+  };
+
+  const openEdit = (event: EventType) => {
+    resetForm();
+    setForm({
+      name: event.name,
+      type: event.type,
+      date: event.date,
+      startTime: event.startTime,
+      endTime: event.endTime,
+      description: event.description,
+      link: event.link || '',
+    });
+    setEditingEvent(event);
+    setShowModal(true);
+  };
+
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setPhotoError('');
+    if (!file) {
+      setPhotoFile(null);
+      return;
+    }
+    const validation = validateImage(file);
+    if (!validation.valid) {
+      setPhotoError(validation.error || 'Choose an image file.');
+      setPhotoFile(null);
+      e.target.value = '';
+      return;
+    }
+    setPhotoFile(file);
+  };
+
+  const setField = (field: keyof typeof EMPTY_FORM) => (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => setForm((current) => ({ ...current, [field]: e.target.value }));
+
+  // ---- save / delete -------------------------------------------------------
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (saving) return;
+
+    if (form.endTime <= form.startTime) {
+      setProgress({ progress: 0, status: 'error', error: 'The end time must be after the start time.' });
+      return;
+    }
+
+    const eventData: EventFormData = {
+      name: form.name,
+      type: form.type,
+      date: form.date,
+      startTime: form.startTime,
+      endTime: form.endTime,
+      description: form.description,
+      link: form.link || undefined,
+    };
+
     try {
-      setUploadProgress({ progress: 0, status: 'uploading' });
-      
+      setProgress({ progress: 0, status: 'uploading' });
       if (editingEvent) {
-        await updateEvent(editingEvent, eventData, photoFile || undefined, setUploadProgress);
+        await updateEvent(editingEvent, eventData, photoFile || undefined, setProgress);
+        show(`“${form.name}” was updated.`, 'success');
       } else {
-        await createEvent(eventData, photoFile as File, setUploadProgress);
+        await createEvent(eventData, photoFile as File, setProgress);
+        show(`“${form.name}” was added to Events.`, 'success');
       }
-      
-      await loadEvents();
+      setShowModal(false);
       resetForm();
-      setShowUploadModal(false);
+      await loadEvents();
     } catch (error) {
       console.error('Error saving event:', error);
-      setUploadProgress({
+      setProgress({
         progress: 0,
         status: 'error',
-        error: toUserMessage(error, 'Could not save the event. Please try again.')
+        error: toUserMessage(error, 'Could not save the event. Your changes are still here, so try again.'),
       });
     }
   };
-  
-  const resetForm = () => {
-    setEventName('');
-    setEventType('g-body');
-    setEventDate('');
-    setEventStartTime('');
-    setEventEndTime('');
-    setEventDescription('');
-    setEventLink('');
-    setPhotoFile(null);
-    setPhotoPreview('');
-    setEditingEvent(null);
-    setUploadProgress(null);
-  };
-  
-  const handleEditEvent = (event: EventType) => {
-    setUploadProgress(null);
-    setPhotoFile(null);
-    setEventName(event.name);
-    setEventType(event.type);
-    setEventDate(event.date);
-    setEventStartTime(event.startTime);
-    setEventEndTime(event.endTime);
-    setEventDescription(event.description);
-    setEventLink(event.link || '');
-    setPhotoPreview(event.photoUrl);
-    setEditingEvent(event);
-    setShowUploadModal(true);
-  };
-  
-  const handleDeleteEvent = async (event: EventType) => {
-    if (!window.confirm(`Delete "${event.name}"? This cannot be undone.`)) return;
+
+  const handleDelete = async (event: EventType) => {
+    const ok = await confirm({
+      title: 'Delete this event?',
+      message: `“${event.name}” and its photo will be removed for everyone. This cannot be undone.`,
+      confirmLabel: 'Delete event',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteEvent(event);
       setEvents((current) => current.filter((e) => e.id !== event.id));
+      show(`“${event.name}” was deleted.`, 'success');
     } catch (error) {
       console.error('Error deleting event:', error);
-      alert(toUserMessage(error, 'Failed to delete event. Please try again.'));
+      show(toUserMessage(error, 'The event could not be deleted. Please try again.'), 'error');
     }
   };
-  
-  const ongoingEvents = events.filter(event => 
-    getEventStatus(event.date, event.startTime, event.endTime) === 'ongoing'
-  );
-  const upcomingEvents = events.filter(event => 
-    getEventStatus(event.date, event.startTime, event.endTime) === 'upcoming'
-  );
-  const pastEvents = events.filter(event => 
-    getEventStatus(event.date, event.startTime, event.endTime) === 'past'
-  );
-  
-  const EventCard: React.FC<{ event: EventType; status: 'ongoing' | 'upcoming' | 'past' }> = ({ event, status }) => (
-    <div className={`event-card ${event.type === 'major' ? 'major-event' : 'gbody-event'}`}>
-      <div className="event-image-container">
-        <img src={event.photoUrl} alt={event.name} className="event-image" />
-        {event.type === 'major' && <div className="major-badge">MAJOR EVENT</div>}
-        {isAdmin && (
-          <div className="event-actions">
-            <button className="edit-btn" onClick={() => handleEditEvent(event)} title="Edit event">
-              ✏️
-            </button>
-            <button className="delete-btn" onClick={() => handleDeleteEvent(event)} title="Delete event">
-              🗑️
-            </button>
-          </div>
-        )}
-      </div>
-      <div className="event-details">
-        <div className="event-header">
-          {status === 'ongoing' && <span className="status-indicator ongoing"></span>}
-          <h3 className="event-name">{event.name}</h3>
+
+  // ---- derived lists -------------------------------------------------------
+
+  const statusOf = (event: EventType): Status => getEventStatus(event.date, event.startTime, event.endTime);
+  const ongoing = events.filter((e) => statusOf(e) === 'ongoing');
+  const upcoming = events.filter((e) => statusOf(e) === 'upcoming');
+  const past = events.filter((e) => statusOf(e) === 'past');
+
+  const section = (title: string, items: EventType[], status: Status, tone: string) =>
+    items.length > 0 && (
+      <section className="events-section" aria-labelledby={`events-${status}`}>
+        <h2 id={`events-${status}`} className={`section-title ${tone}`}>
+          {title} <span className="section-count">{items.length}</span>
+        </h2>
+        <div className="events-grid">
+          {items.map((event) => (
+            <EventCard
+              key={event.id}
+              event={event}
+              status={status}
+              isAdmin={isAdmin}
+              onEdit={openEdit}
+              onDelete={handleDelete}
+            />
+          ))}
         </div>
-        <div className="event-datetime">
-          <span className="event-date">📅 {formatEventDate(event.date)}</span>
-          <span className="event-time">🕐 {formatEventTime(event.startTime)} - {formatEventTime(event.endTime)}</span>
-        </div>
-        <p className="event-description">{event.description}</p>
-        {event.link && (
-          <a href={event.link} target="_blank" rel="noopener noreferrer" className="event-link">
-            View Event Details →
-          </a>
-        )}
-      </div>
-    </div>
-  );
-  
+      </section>
+    );
+
+  // ---- render --------------------------------------------------------------
+
   return (
     <div className="events-page">
       <div className="events-content">
         <h1 className="events-title">ADG Events</h1>
-        
+        <p className="events-intro">
+          Talks, cultural nights and community gatherings from African Development Group Columbia.
+        </p>
+
         {isAdmin && (
-          <button
-            className="upload-event-btn"
-            onClick={handleUploadClick}
-          >
-            + Upload Event
+          <button type="button" className="upload-event-btn" onClick={openNewEvent}>
+            + Add event
           </button>
         )}
-        
+
         {loading ? (
-          <div className="loading-container">
-            <p>Loading events...</p>
+          <div className="loading-container" role="status" aria-live="polite">
+            <div className="spinner" aria-hidden="true" />
+            <p>Loading events…</p>
           </div>
         ) : loadError ? (
-          <div className="no-events">
+          <div className="no-events" role="alert">
             <p>{loadError}</p>
+            <button type="button" className="retry-btn" onClick={loadEvents}>
+              Try again
+            </button>
+          </div>
+        ) : events.length === 0 ? (
+          <div className="no-events">
+            <p>No events are scheduled yet.</p>
+            <p className="empty-hint">New events are posted by ADG board members. Check back soon.</p>
           </div>
         ) : (
           <>
-            {/* Ongoing Events Section */}
-            {ongoingEvents.length > 0 && (
-              <section className="events-section">
-                <h2 className="section-title ongoing-title">🔴 Currently Ongoing</h2>
-                <div className="events-grid">
-                  {ongoingEvents.map((event) => (
-                    <EventCard key={event.id} event={event} status="ongoing" />
-                  ))}
-                </div>
-              </section>
-            )}
-            
-            {/* Upcoming Events Section */}
-            {upcomingEvents.length > 0 && (
-              <section className="events-section">
-                <h2 className="section-title upcoming-title">📆 Upcoming Events</h2>
-                <div className="events-grid">
-                  {upcomingEvents.map((event) => (
-                    <EventCard key={event.id} event={event} status="upcoming" />
-                  ))}
-                </div>
-              </section>
-            )}
-            
-            {/* Past Events Section */}
-            {pastEvents.length > 0 && (
-              <section className="events-section">
-                <h2 className="section-title past-title">📜 Past Events</h2>
-                <div className="events-grid">
-                  {pastEvents.map((event) => (
-                    <EventCard key={event.id} event={event} status="past" />
-                  ))}
-                </div>
-              </section>
-            )}
-            
-            {events.length === 0 && (
-              <div className="no-events">
-                <p>No events yet. Check back soon!</p>
-              </div>
-            )}
+            {section('🔴 Happening now', ongoing, 'ongoing', 'ongoing-title')}
+            {section('📆 Upcoming', upcoming, 'upcoming', 'upcoming-title')}
+            {section('📜 Past events', past, 'past', 'past-title')}
           </>
         )}
       </div>
-      
-      {/* Upload / Edit Event Modal (admins only) */}
-      {showUploadModal && isAdmin && (
-        <div className="modal-overlay" onClick={() => { if (uploadProgress?.status === 'uploading') return; setShowUploadModal(false); resetForm(); }}>
-          <div className="modal-content upload-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" disabled={uploadProgress?.status === 'uploading'} onClick={() => { setShowUploadModal(false); resetForm(); }}>×</button>
-            <h2>{editingEvent ? 'Edit Event' : 'Upload New Event'}</h2>
-            <form onSubmit={handleEventUpload}>
+
+      {showModal && isAdmin && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div
+            className="modal-content upload-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="event-form-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="modal-close"
+              aria-label="Close without saving"
+              disabled={saving}
+              onClick={closeModal}
+            >
+              ×
+            </button>
+            <h2 id="event-form-title">{editingEvent ? `Edit “${editingEvent.name}”` : 'Add a new event'}</h2>
+            <p className="form-intro">
+              {editingEvent
+                ? 'Change the details you need, then press Save changes. Cancel leaves the event as it was.'
+                : 'Fields marked * are required. Every admin can edit or delete this event later.'}
+            </p>
+
+            <form onSubmit={handleSave} noValidate={false}>
               <div className="form-group">
-                <label>Event Photo *</label>
+                <label htmlFor="ev-photo">Event photo {editingEvent ? '' : '*'}</label>
                 <input
+                  id="ev-photo"
                   type="file"
                   accept="image/*"
-                  onChange={handlePhotoUpload}
+                  onChange={handlePhotoChange}
                   required={!editingEvent}
+                  disabled={saving}
+                  aria-describedby="ev-photo-help"
                 />
-                {photoPreview && (
+                {photoError && <p className="field-error" role="alert">{photoError}</p>}
+                {previewSrc && (
                   <div className="photo-preview">
-                    <img src={photoPreview} alt="Preview" />
+                    <img src={previewSrc} alt="Preview" />
+                    <span className="photo-preview__note">
+                      {photoFile ? 'New photo selected' : 'Current photo. Choose a file to replace it.'}
+                    </span>
                   </div>
                 )}
-                <small>Maximum size: {MAX_EVENT_PHOTO_MB}MB. Supported formats: JPG, PNG, GIF, WebP</small>
+                <small id="ev-photo-help">Up to {MAX_EVENT_PHOTO_MB} MB. JPG, PNG, GIF or WebP.</small>
               </div>
-              
+
               <div className="form-group">
-                <label>Event Name *</label>
-                <input
-                  type="text"
-                  value={eventName}
-                  onChange={(e) => setEventName(e.target.value)}
-                  placeholder="Enter event name"
-                  required
-                />
+                <label htmlFor="ev-name">Event name *</label>
+                <input id="ev-name" type="text" value={form.name} onChange={setField('name')} placeholder="For example, Open Mic Night" maxLength={200} required disabled={saving} />
               </div>
-              
+
               <div className="form-group">
-                <label>Event Type *</label>
-                <select value={eventType} onChange={(e) => setEventType(e.target.value as 'g-body' | 'major')}>
-                  <option value="g-body">G-Body Event</option>
-                  <option value="major">Major Event</option>
+                <label htmlFor="ev-type">Event type *</label>
+                <select id="ev-type" value={form.type} onChange={setField('type')} disabled={saving}>
+                  <option value="g-body">G-Body event</option>
+                  <option value="major">Major event</option>
                 </select>
+                <small>Major events are highlighted on the page.</small>
               </div>
-              
+
               <div className="form-group">
-                <label>Date *</label>
-                <input
-                  type="date"
-                  value={eventDate}
-                  onChange={(e) => setEventDate(e.target.value)}
-                  required
-                />
+                <label htmlFor="ev-date">Date *</label>
+                <input id="ev-date" type="date" value={form.date} onChange={setField('date')} required disabled={saving} />
               </div>
-              
+
               <div className="form-row">
                 <div className="form-group">
-                  <label>Start Time *</label>
-                  <input
-                    type="time"
-                    value={eventStartTime}
-                    onChange={(e) => setEventStartTime(e.target.value)}
-                    required
-                  />
+                  <label htmlFor="ev-start">Start time *</label>
+                  <input id="ev-start" type="time" value={form.startTime} onChange={setField('startTime')} required disabled={saving} />
                 </div>
-                
                 <div className="form-group">
-                  <label>End Time *</label>
-                  <input
-                    type="time"
-                    value={eventEndTime}
-                    onChange={(e) => setEventEndTime(e.target.value)}
-                    required
-                  />
+                  <label htmlFor="ev-end">End time *</label>
+                  <input id="ev-end" type="time" value={form.endTime} onChange={setField('endTime')} required disabled={saving} />
                 </div>
               </div>
-              
+
               <div className="form-group">
-                <label>Description *</label>
-                <textarea
-                  value={eventDescription}
-                  onChange={(e) => setEventDescription(e.target.value)}
-                  placeholder="Describe the event..."
-                  rows={4}
-                  required
-                />
+                <label htmlFor="ev-desc">Description *</label>
+                <textarea id="ev-desc" value={form.description} onChange={setField('description')} placeholder="What is this event about, and who should come?" rows={4} maxLength={5000} required disabled={saving} />
               </div>
-              
+
               <div className="form-group">
-                <label>Event Link (Optional)</label>
-                <input
-                  type="url"
-                  value={eventLink}
-                  onChange={(e) => setEventLink(e.target.value)}
-                  placeholder="https://example.com/event"
-                />
+                <label htmlFor="ev-link">Link (optional)</label>
+                <input id="ev-link" type="url" value={form.link} onChange={setField('link')} placeholder="https://example.com/event" disabled={saving} />
+                <small>Add a registration or details page, starting with https://</small>
               </div>
-              
-              {uploadProgress && (
-                <div className="upload-progress">
-                  {uploadProgress.status === 'uploading' && (
-                    <div className="progress-bar">
-                      <div 
-                        className="progress-fill" 
-                        style={{ width: `${uploadProgress.progress}%` }}
-                      ></div>
-                      <span className="progress-text">{uploadProgress.progress}%</span>
-                    </div>
-                  )}
-                  {uploadProgress.status === 'error' && (
-                    <p className="upload-error">Error: {uploadProgress.error}</p>
-                  )}
+
+              {progress?.status === 'uploading' && (
+                <div className="upload-progress" role="status" aria-live="polite">
+                  <div className="progress-bar">
+                    <div className="progress-fill" style={{ width: `${progress.progress}%` }} />
+                    <span className="progress-text">{progress.progress}%</span>
+                  </div>
                 </div>
               )}
-              
-              <button 
-                type="submit" 
-                className="upload-submit-btn"
-                disabled={uploadProgress?.status === 'uploading'}
-              >
-                {uploadProgress?.status === 'uploading' 
-                  ? 'Uploading...' 
-                  : editingEvent ? 'Update Event' : 'Upload Event'}
-              </button>
+              {progress?.status === 'error' && (
+                <p className="upload-error" role="alert">{progress.error}</p>
+              )}
+
+              <div className="form-actions">
+                <button type="button" className="secondary-btn" onClick={closeModal} disabled={saving}>
+                  Cancel
+                </button>
+                <button type="submit" className="upload-submit-btn" disabled={saving}>
+                  {saving ? 'Saving…' : editingEvent ? 'Save changes' : 'Add event'}
+                </button>
+              </div>
             </form>
           </div>
         </div>
