@@ -1,146 +1,47 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { isSupabaseConfigured } from '../../lib/supabase';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import './Auth.css';
 import { useScrollAnimation } from '../../hooks/useScrollAnimation';
 
-interface AuthFormData {
-  name?: string;
-  email: string;
-  password: string;
-  confirmPassword?: string;
-  birthday?: string;
-  school?: string;
-}
-
+/**
+ * Sign up and sign in are the same step: "Continue with Google".
+ * A first-time Google account gets an ADG account created automatically.
+ */
 const Auth: React.FC = () => {
+  usePageTitle('Sign in');
   const navigate = useNavigate();
-  const { signup, login } = useAuth();
-  
-  // Scroll animation
+  const location = useLocation();
+  const { currentUser, signInWithGoogle } = useAuth();
   const authBoxAnim = useScrollAnimation();
-  
-  const [isSignUp, setIsSignUp] = useState(true);
+
+  const returnTo = (location.state as { from?: string } | null)?.from || '/';
+
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [formData, setFormData] = useState<AuthFormData>({
-    name: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    birthday: '',
-    school: ''
+  const [error, setError] = useState(() => {
+    // Google/Supabase report a failed or cancelled sign-in in the URL.
+    const params = new URLSearchParams(window.location.search);
+    return params.get('error_description') || '';
   });
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    // Clear error when user starts typing
-    if (error) setError('');
-  };
+  // Already signed in (or just came back from Google): leave this page.
+  useEffect(() => {
+    if (currentUser) navigate(returnTo, { replace: true });
+  }, [currentUser, navigate, returnTo]);
 
-  const getErrorMessage = (error: any): string => {
-    const errorCode = error.code;
-    
-    switch (errorCode) {
-      case 'auth/email-already-in-use':
-        return 'This email is already registered. Please log in instead.';
-      case 'auth/invalid-email':
-        return 'Invalid email address.';
-      case 'auth/weak-password':
-        return 'Password should be at least 6 characters.';
-      case 'auth/user-not-found':
-        return 'No account found with this email.';
-      case 'auth/wrong-password':
-        return 'Incorrect password. Please try again.';
-      case 'auth/too-many-requests':
-        return 'Too many failed attempts. Please try again later.';
-      case 'auth/network-request-failed':
-        return 'Network error. Please check your connection.';
-      default:
-        return 'An error occurred. Please try again.';
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoogle = async () => {
     setError('');
     setLoading(true);
-    
     try {
-      if (isSignUp) {
-        // Sign up validation
-        if (!formData.name?.trim()) {
-          setError('Please enter your name.');
-          setLoading(false);
-          return;
-        }
-        
-        if (formData.password !== formData.confirmPassword) {
-          setError('Passwords do not match!');
-          setLoading(false);
-          return;
-        }
-        
-        if (formData.password.length < 6) {
-          setError('Password should be at least 6 characters.');
-          setLoading(false);
-          return;
-        }
-        
-        if (!formData.birthday) {
-          setError('Please enter your birthday.');
-          setLoading(false);
-          return;
-        }
-        
-        if (!formData.school?.trim()) {
-          setError('Please enter your school name.');
-          setLoading(false);
-          return;
-        }
-        
-        // Sign up user
-        await signup(
-          formData.email,
-          formData.password,
-          formData.name,
-          formData.birthday,
-          formData.school
-        );
-        
-        // Navigate to home page after successful signup
-        navigate('/');
-      } else {
-        // Log in user
-        await login(formData.email, formData.password);
-        
-        // Navigate to home page after successful login
-        navigate('/');
-      }
+      await signInWithGoogle(returnTo);
+      // The browser now redirects to Google; nothing more to do here.
     } catch (err: any) {
-      console.error('Authentication error:', err);
-      setError(getErrorMessage(err));
-    } finally {
+      console.error('Sign-in error:', err);
+      setError(err?.message || 'Could not start Google sign-in. Please try again.');
       setLoading(false);
     }
-  };
-
-  const toggleMode = () => {
-    setIsSignUp(!isSignUp);
-    setError('');
-    // Clear form when switching modes
-    setFormData({
-      name: '',
-      email: '',
-      password: '',
-      confirmPassword: '',
-      birthday: '',
-      school: ''
-    });
   };
 
   return (
@@ -150,124 +51,35 @@ const Auth: React.FC = () => {
         className={`auth-box animate-on-scroll slide-up ${authBoxAnim.isVisible ? 'is-visible' : ''}`}
       >
         <div className="adg-logo">
-          <img
-            src="/images/adg-logo.jpeg"
-            alt="ADG Logo"
-            className="adg-photo"
-          />
+          <img src="/images/adg-logo.jpeg" alt="ADG Logo" className="adg-photo" />
         </div>
-        
-        <h2>{isSignUp ? 'Join ADG' : 'Welcome Back'}</h2>
-        
-        {error && (
-          <div className="auth-error">
-            {error}
-          </div>
+
+        <h2>Welcome to ADG</h2>
+
+        {error && <div className="auth-error">{error}</div>}
+        {!isSupabaseConfigured && (
+          <div className="auth-error">Sign-in is not configured for this deployment yet.</div>
         )}
-        
-        <form onSubmit={handleSubmit}>
-          {isSignUp && (
-            <div className="form-group">
-              <label htmlFor="name">Name</label>
-              <input
-                type="text"
-                id="name"
-                name="name"
-                value={formData.name}
-                onChange={handleInputChange}
-                required
-                placeholder="Enter your full name"
-                disabled={loading}
-              />
-            </div>
-          )}
 
-          <div className="form-group">
-            <label htmlFor="email">Email</label>
-            <input
-              type="email"
-              id="email"
-              name="email"
-              value={formData.email}
-              onChange={handleInputChange}
-              required
-              placeholder="Enter your email"
-              disabled={loading}
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <input
-              type="password"
-              id="password"
-              name="password"
-              value={formData.password}
-              onChange={handleInputChange}
-              required
-              placeholder="Enter your password"
-              disabled={loading}
-              minLength={6}
-            />
-          </div>
-
-          {isSignUp && (
-            <>
-              <div className="form-group">
-                <label htmlFor="confirmPassword">Confirm Password</label>
-                <input
-                  type="password"
-                  id="confirmPassword"
-                  name="confirmPassword"
-                  value={formData.confirmPassword}
-                  onChange={handleInputChange}
-                  required
-                  placeholder="Confirm your password"
-                  disabled={loading}
-                  minLength={6}
-                />
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="birthday">Birthday</label>
-                <input
-                  type="date"
-                  id="birthday"
-                  name="birthday"
-                  value={formData.birthday}
-                  onChange={handleInputChange}
-                  required
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="school">School</label>
-                <input
-                  type="text"
-                  id="school"
-                  name="school"
-                  value={formData.school}
-                  onChange={handleInputChange}
-                  required
-                  placeholder="Enter your school name"
-                  disabled={loading}
-                />
-              </div>
-            </>
-          )}
-
-          <button type="submit" className="submit-btn" disabled={loading}>
-            {loading ? (isSignUp ? 'Signing Up...' : 'Logging In...') : (isSignUp ? 'Sign Up' : 'Log In')}
-          </button>
-        </form>
+        <button
+          type="button"
+          className="google-btn"
+          onClick={handleGoogle}
+          disabled={loading || !isSupabaseConfigured}
+        >
+          <svg className="google-icon" viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.2C12.4 13.6 17.7 9.5 24 9.5z" />
+            <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.2 5.5-4.7 7.2l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.6z" />
+            <path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.2C.9 16.5 0 20.1 0 24s.9 7.5 2.6 10.8l7.9-6.2z" />
+            <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.2-13.5-9.9l-7.9 6.2C6.5 42.6 14.6 48 24 48z" />
+          </svg>
+          {loading ? 'Redirecting to Google…' : 'Continue with Google'}
+        </button>
 
         <div className="toggle-mode">
           <p>
-            {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
-            <span onClick={toggleMode} className="toggle-link" style={{ pointerEvents: loading ? 'none' : 'auto', opacity: loading ? 0.6 : 1 }}>
-              {isSignUp ? 'Log In' : 'Sign Up'}
-            </span>
+            New here? Continuing with Google creates your account. ADG board members should use
+            their board email to manage events and reels.
           </p>
         </div>
       </div>

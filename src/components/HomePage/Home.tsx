@@ -1,6 +1,7 @@
 import React from 'react';
 import './Home.css';
 import { useScrollAnimation } from '../../hooks/useScrollAnimation';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 interface EBoardMember {
   name: string;
@@ -11,6 +12,7 @@ interface EBoardMember {
 }
 
 const Home: React.FC = () => {
+  usePageTitle();
   // Scroll animation hooks for different sections
   const titleAnim = useScrollAnimation();
   const aboutAnim = useScrollAnimation();

@@ -9,17 +9,20 @@ import {
   formatEventDate,
   formatEventTime
 } from '../../services/eventService';
-import { validateImage } from '../../services/storageService';
-import { checkContentCreationPermission } from '../../services/authorizationService';
+import { validateImage, MAX_EVENT_PHOTO_MB } from '../../services/storageService';
+import { toUserMessage } from '../../lib/supabase';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { useAuth } from '../../contexts/AuthContext';
 import { Event as EventType, EventFormData, UploadProgress } from '../../types';
 
 const Events: React.FC = () => {
-  const { currentUser, userData } = useAuth();
+  usePageTitle('Events');
+  // isAdmin only decides which controls are shown; the database enforces it.
+  const { isAdmin } = useAuth();
   const [events, setEvents] = useState<EventType[]>([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showAuthorizationMessage, setShowAuthorizationMessage] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   
   // Upload form state
@@ -34,15 +37,9 @@ const Events: React.FC = () => {
   const [photoPreview, setPhotoPreview] = useState('');
   
   // Editing state
-  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editingEvent, setEditingEvent] = useState<EventType | null>(null);
   
-  // Check user authorization
-  const userEmail = currentUser?.email || null;
-  const { authorized: isAuthorized, message: authMessage } = checkContentCreationPermission(userEmail);
-  const isAuthenticated = currentUser !== null;
-  const currentUserId = currentUser?.uid || '';
-  
-  // Load events from Firebase on mount
+  // Load events on mount
   useEffect(() => {
     loadEvents();
   }, []);
@@ -82,39 +79,18 @@ const Events: React.FC = () => {
   const loadEvents = async () => {
     try {
       setLoading(true);
-      const fetchedEvents = await getAllEvents();
-      setEvents(fetchedEvents);
+      setLoadError('');
+      setEvents(await getAllEvents());
     } catch (error) {
       console.error('Error loading events:', error);
-      // Fallback to localStorage if Firebase fails
-      const storedEvents = localStorage.getItem('adg-events');
-      if (storedEvents) {
-        try {
-          const parsedEvents = JSON.parse(storedEvents);
-          setEvents(parsedEvents.filter((e: any) => e.id && e.name && e.date));
-        } catch (e) {
-          console.error('Error parsing stored events:', e);
-        }
-      }
+      setLoadError('Could not load events. Please refresh the page.');
     } finally {
       setLoading(false);
     }
   };
   
   const handleUploadClick = () => {
-    if (!isAuthenticated) {
-      // User needs to sign in
-      alert('Please sign in to upload events');
-      return;
-    }
-    
-    if (!isAuthorized) {
-      // User is signed in but not authorized
-      setShowAuthorizationMessage(true);
-      return;
-    }
-    
-    // User is signed in AND authorized
+    resetForm();
     setShowUploadModal(true);
   };
   
@@ -140,73 +116,40 @@ const Events: React.FC = () => {
   const handleEventUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!currentUserId) {
-      alert('User authentication required');
+    const eventData: EventFormData = {
+      name: eventName,
+      type: eventType,
+      date: eventDate,
+      startTime: eventStartTime,
+      endTime: eventEndTime,
+      description: eventDescription,
+      link: eventLink || undefined
+    };
+    
+    if (!editingEvent && !photoFile) {
+      alert('Please select a photo');
       return;
     }
     
     try {
       setUploadProgress({ progress: 0, status: 'uploading' });
       
-      if (editingEventId) {
-        // Update existing event
-        const updates: Partial<EventFormData> = {
-          name: eventName,
-          type: eventType,
-          date: eventDate,
-          startTime: eventStartTime,
-          endTime: eventEndTime,
-          description: eventDescription,
-          link: eventLink || undefined
-        };
-        
-        await updateEvent(
-          editingEventId,
-          updates,
-          photoFile || undefined,
-          currentUserId
-        );
-        
-        setUploadProgress({ progress: 100, status: 'complete' });
-        alert('Event updated successfully!');
+      if (editingEvent) {
+        await updateEvent(editingEvent, eventData, photoFile || undefined, setUploadProgress);
       } else {
-        // Create new event
-        if (!photoFile) {
-          alert('Please select a photo');
-          return;
-        }
-        
-        const eventData: EventFormData = {
-          name: eventName,
-          type: eventType,
-          date: eventDate,
-          startTime: eventStartTime,
-          endTime: eventEndTime,
-          description: eventDescription,
-          link: eventLink || undefined
-        };
-        
-        await createEvent(eventData, photoFile, currentUserId);
-        
-        setUploadProgress({ progress: 100, status: 'complete' });
-        alert('Event created successfully!');
+        await createEvent(eventData, photoFile as File, setUploadProgress);
       }
       
-      // Reload events
       await loadEvents();
-      
-      // Reset form
       resetForm();
       setShowUploadModal(false);
-      setUploadProgress(null);
     } catch (error) {
-      console.error('Error uploading event:', error);
-      setUploadProgress({ 
-        progress: 0, 
+      console.error('Error saving event:', error);
+      setUploadProgress({
+        progress: 0,
         status: 'error',
-        error: error instanceof Error ? error.message : 'Upload failed' 
+        error: toUserMessage(error, 'Could not save the event. Please try again.')
       });
-      alert('Failed to upload event. Please try again.');
     }
   };
   
@@ -220,20 +163,13 @@ const Events: React.FC = () => {
     setEventLink('');
     setPhotoFile(null);
     setPhotoPreview('');
-    setEditingEventId(null);
+    setEditingEvent(null);
+    setUploadProgress(null);
   };
   
   const handleEditEvent = (event: EventType) => {
-    if (!isAuthenticated) {
-      alert('Please sign in to edit events');
-      return;
-    }
-    
-    if (!isAuthorized) {
-      setShowAuthorizationMessage(true);
-      return;
-    }
-    
+    setUploadProgress(null);
+    setPhotoFile(null);
     setEventName(event.name);
     setEventType(event.type);
     setEventDate(event.date);
@@ -242,30 +178,18 @@ const Events: React.FC = () => {
     setEventDescription(event.description);
     setEventLink(event.link || '');
     setPhotoPreview(event.photoUrl);
-    setEditingEventId(event.id);
+    setEditingEvent(event);
     setShowUploadModal(true);
   };
   
-  const handleDeleteEvent = async (eventId: string, uploadedBy: string) => {
-    if (!isAuthenticated) {
-      alert('Please sign in to delete events');
-      return;
-    }
-    
-    if (!isAuthorized) {
-      setShowAuthorizationMessage(true);
-      return;
-    }
-    
-    if (window.confirm('Are you sure you want to delete this event?')) {
-      try {
-        await deleteEvent(eventId, uploadedBy);
-        alert('Event deleted successfully!');
-        await loadEvents();
-      } catch (error) {
-        console.error('Error deleting event:', error);
-        alert('Failed to delete event. Please try again.');
-      }
+  const handleDeleteEvent = async (event: EventType) => {
+    if (!window.confirm(`Delete "${event.name}"? This cannot be undone.`)) return;
+    try {
+      await deleteEvent(event);
+      setEvents((current) => current.filter((e) => e.id !== event.id));
+    } catch (error) {
+      console.error('Error deleting event:', error);
+      alert(toUserMessage(error, 'Failed to delete event. Please try again.'));
     }
   };
   
@@ -284,12 +208,12 @@ const Events: React.FC = () => {
       <div className="event-image-container">
         <img src={event.photoUrl} alt={event.name} className="event-image" />
         {event.type === 'major' && <div className="major-badge">MAJOR EVENT</div>}
-        {isAuthenticated && isAuthorized && (
+        {isAdmin && (
           <div className="event-actions">
             <button className="edit-btn" onClick={() => handleEditEvent(event)} title="Edit event">
               ✏️
             </button>
-            <button className="delete-btn" onClick={() => handleDeleteEvent(event.id, event.uploadedBy)} title="Delete event">
+            <button className="delete-btn" onClick={() => handleDeleteEvent(event)} title="Delete event">
               🗑️
             </button>
           </div>
@@ -319,16 +243,22 @@ const Events: React.FC = () => {
       <div className="events-content">
         <h1 className="events-title">ADG Events</h1>
         
-        <button
-          className="upload-event-btn"
-          onClick={handleUploadClick}
-        >
-          + Upload Event
-        </button>
+        {isAdmin && (
+          <button
+            className="upload-event-btn"
+            onClick={handleUploadClick}
+          >
+            + Upload Event
+          </button>
+        )}
         
         {loading ? (
           <div className="loading-container">
             <p>Loading events...</p>
+          </div>
+        ) : loadError ? (
+          <div className="no-events">
+            <p>{loadError}</p>
           </div>
         ) : (
           <>
@@ -370,44 +300,19 @@ const Events: React.FC = () => {
             
             {events.length === 0 && (
               <div className="no-events">
-                <p>No events yet. Be the first to upload an event!</p>
+                <p>No events yet. Check back soon!</p>
               </div>
             )}
           </>
         )}
       </div>
       
-      {/* Authorization Message Modal */}
-      {showAuthorizationMessage && (
-        <div className="modal-overlay" onClick={() => setShowAuthorizationMessage(false)}>
-          <div className="modal-content auth-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowAuthorizationMessage(false)}>×</button>
-            <h2>🔒 Authorization Required</h2>
-            <div className="auth-message">
-              <p>{authMessage}</p>
-              <p className="auth-details">
-                You are currently signed in as: <strong>{userEmail}</strong>
-              </p>
-              <p className="auth-contact">
-                To request upload access, please contact an ADG administrator.
-              </p>
-            </div>
-            <button
-              className="auth-submit-btn"
-              onClick={() => setShowAuthorizationMessage(false)}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-      
-      {/* Upload Event Modal */}
-      {showUploadModal && (
-        <div className="modal-overlay" onClick={() => { setShowUploadModal(false); resetForm(); }}>
+      {/* Upload / Edit Event Modal (admins only) */}
+      {showUploadModal && isAdmin && (
+        <div className="modal-overlay" onClick={() => { if (uploadProgress?.status === 'uploading') return; setShowUploadModal(false); resetForm(); }}>
           <div className="modal-content upload-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => { setShowUploadModal(false); resetForm(); }}>×</button>
-            <h2>{editingEventId ? 'Edit Event' : 'Upload New Event'}</h2>
+            <button className="modal-close" disabled={uploadProgress?.status === 'uploading'} onClick={() => { setShowUploadModal(false); resetForm(); }}>×</button>
+            <h2>{editingEvent ? 'Edit Event' : 'Upload New Event'}</h2>
             <form onSubmit={handleEventUpload}>
               <div className="form-group">
                 <label>Event Photo *</label>
@@ -415,14 +320,14 @@ const Events: React.FC = () => {
                   type="file"
                   accept="image/*"
                   onChange={handlePhotoUpload}
-                  required={!editingEventId}
+                  required={!editingEvent}
                 />
                 {photoPreview && (
                   <div className="photo-preview">
                     <img src={photoPreview} alt="Preview" />
                   </div>
                 )}
-                <small>Maximum size: 10MB. Supported formats: JPG, PNG, GIF, WebP</small>
+                <small>Maximum size: {MAX_EVENT_PHOTO_MB}MB. Supported formats: JPG, PNG, GIF, WebP</small>
               </div>
               
               <div className="form-group">
@@ -521,7 +426,7 @@ const Events: React.FC = () => {
               >
                 {uploadProgress?.status === 'uploading' 
                   ? 'Uploading...' 
-                  : editingEventId ? 'Update Event' : 'Upload Event'}
+                  : editingEvent ? 'Update Event' : 'Upload Event'}
               </button>
             </form>
           </div>

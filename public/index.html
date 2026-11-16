@@ -2,42 +2,71 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <link rel="icon" href="%PUBLIC_URL%/images/ADG-logo2.JPG" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
+
+    <!-- The exact organisation name leads the title: it is what people search for. -->
+    <title>African Development Group Columbia (ADG)</title>
     <meta
       name="description"
-      content="African Development Group Columbia official website"
+      content="African Development Group Columbia (ADG) is a Columbia University student organization. See upcoming events, reels, and meet the executive board."
     />
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/images/ADG-logo2.JPG" />
-    <!--
-      manifest.json provides metadata used when your web app is installed on a
-      user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
-    -->
-    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    <!--
-      Notice the use of %PUBLIC_URL% in the tags above.
-      It will be replaced with the URL of the `public` folder during the build.
-      Only files inside the `public` folder can be referenced from the HTML.
+    <link rel="canonical" href="%REACT_APP_SITE_URL%/" />
 
-      Unlike "/favicon.ico" or "favicon.ico", "%PUBLIC_URL%/favicon.ico" will
-      work correctly both with client-side routing and a non-root public URL.
-      Learn how to configure a non-root public URL by running `npm run build`.
-    -->
-    <title>ADG</title>
+    <link rel="icon" href="%PUBLIC_URL%/images/ADG-logo2.JPG" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/images/ADG-logo2.JPG" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+
+    <!-- Link previews (iMessage, WhatsApp, Instagram, LinkedIn, X) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="African Development Group Columbia" />
+    <meta property="og:title" content="African Development Group Columbia (ADG)" />
+    <meta
+      property="og:description"
+      content="Columbia University's African Development Group: events, reels, and community."
+    />
+    <meta property="og:url" content="%REACT_APP_SITE_URL%/" />
+    <meta property="og:image" content="%REACT_APP_SITE_URL%/images/adg-logo.jpeg" />
+    <meta name="twitter:card" content="summary" />
+
+    <!-- Tells Google the site's name and who runs it. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "%REACT_APP_SITE_URL%/#website",
+            "url": "%REACT_APP_SITE_URL%/",
+            "name": "African Development Group Columbia",
+            "alternateName": ["ADG Columbia", "ADG", "Columbia African Development Group"],
+            "publisher": { "@id": "%REACT_APP_SITE_URL%/#organization" }
+          },
+          {
+            "@type": "Organization",
+            "@id": "%REACT_APP_SITE_URL%/#organization",
+            "name": "African Development Group Columbia",
+            "alternateName": ["ADG Columbia", "ADG", "African Development Group"],
+            "url": "%REACT_APP_SITE_URL%/",
+            "logo": "%REACT_APP_SITE_URL%/images/adg-logo.jpeg",
+            "parentOrganization": {
+              "@type": "CollegeOrUniversity",
+              "name": "Columbia University",
+              "url": "https://www.columbia.edu/"
+            }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <noscript>
+      <h1>African Development Group Columbia (ADG)</h1>
+      <p>
+        African Development Group Columbia is a Columbia University student organization. Please
+        enable JavaScript to view events and reels.
+      </p>
+    </noscript>
     <div id="root"></div>
-    <!--
-      This HTML file is a template.
-      If you open it directly in the browser, you will see an empty page.
-
-      You can add webfonts, meta tags, or analytics to this file.
-      The build step will place the bundled scripts into the <body> tag.
-
-      To begin the development, run `npm start` or `yarn start`.
-      To create a production bundle, use `npm run build` or `yarn build`.
-    -->
   </body>
 </html>
